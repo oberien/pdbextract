@@ -316,7 +316,30 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         if let Some(pos) = self.stubs.iter().position(|e| *e == typ) {
             self.stubs.remove(pos);
         }
-        // generics
+        self.add_generics(&typ, Self::add_todo);
+        self.todo.push_back(typ);
+    }
+
+    fn add_stub(&mut self, typ: TypeData<'t>) {
+        if let Some(name) = typ.name() {
+            if self.ignore.iter().any(|s| name.to_ident().starts_with(s)) {
+                return;
+            }
+        }
+        if self.written.contains(&typ) {
+            return;
+        }
+        if self.todo.contains(&typ) {
+            return;
+        }
+        if self.stubs.contains(&typ) {
+            return;
+        }
+        self.add_generics(&typ, Self::add_stub);
+        self.stubs.push(typ);
+    }
+
+    fn add_generics<F: Fn(&mut Self, TypeData<'t>)>(&mut self, typ: &TypeData<'t>, add_fn: F) {
         if let Some(name) = typ.name() {
             if let Some((_, inner)) = get_between(&name.to_string(), '<', '>') {
                 for mut name in split_list(inner) {
@@ -347,30 +370,11 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
                     }
                     if let Some(type_index) = self.name_map[name] {
                         let typ = self.find(type_index).unwrap();
-                        self.add_todo(typ);
+                        add_fn(self, typ);
                     }
                 }
             }
         }
-        self.todo.push_back(typ);
-    }
-
-    fn add_stub(&mut self, typ: TypeData<'t>) {
-        if let Some(name) = typ.name() {
-            if self.ignore.iter().any(|s| name.to_ident().starts_with(s)) {
-                return;
-            }
-        }
-        if self.written.contains(&typ) {
-            return;
-        }
-        if self.todo.contains(&typ) {
-            return;
-        }
-        if self.stubs.contains(&typ) {
-            return;
-        }
-        self.stubs.push(typ);
     }
 
     fn cleanup(&mut self) {
