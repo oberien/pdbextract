@@ -33,6 +33,7 @@ use pdb::{
     ArrayType,
     EnumerateType,
     RawString,
+    ModifierType,
 };
 
 #[derive(Debug, Fail)]
@@ -96,7 +97,7 @@ impl<P: AsRef<Path>> PdbExtract<P> {
         let mut lines = s.lines();
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^(\s+)(\w+): Bitfield(\d+)_(\d+)(\w+),$").unwrap();
-            static ref TYP: Regex = Regex::new(r"^(?:i|u)(\d+)$").unwrap();
+            static ref TYP: Regex = Regex::new(r"^(?:i|u|Bool)(\d+)$").unwrap();
         }
         let mut bitfield_num = 0;
         let mut indent = "".to_string();
@@ -315,6 +316,42 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         if let Some(pos) = self.stubs.iter().position(|e| *e == typ) {
             self.stubs.remove(pos);
         }
+        // generics
+        if let Some(name) = typ.name() {
+            if let Some((_, inner)) = get_between(&name.to_string(), '<', '>') {
+                for mut name in split_list(inner) {
+                    name = name.trim();
+                    if name.starts_with("enum ") {
+                        name = &name[5..];
+                    }
+                    if name.ends_with(" *") || name.ends_with(" &") {
+                        let len = name.len();
+                        name = &name[.. len - 2];
+                    }
+                    if name.ends_with(" const") {
+                        let len = name.len();
+                        name = &name[.. len-6];
+                    }
+                    if name.parse::<u64>().is_ok() {
+                        // number
+                        continue;
+                    }
+                    // blacklist of primitive types
+                    match name {
+                        "void" | "bool" | "char" | "short" | "int" | "long" | "wchar_t"
+                        | "float" | "double" | "unnamed-tag" => continue,
+                        name if name.starts_with("unsigned") => continue,
+                        // TODO: let's just hope that this catches only function pointers
+                        name if name.contains("(") && name.contains(")") => continue,
+                        _ => {}
+                    }
+                    if let Some(type_index) = self.name_map[name] {
+                        let typ = self.find(type_index).unwrap();
+                        self.add_todo(typ);
+                    }
+                }
+            }
+        }
         self.todo.push_back(typ);
     }
 
@@ -356,6 +393,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write(&mut self, data: TypeData) -> Result<()> {
+        println!("write: {:?}", data);
         match data {
             TypeData::Class(typ) => self.write_class(typ),
             TypeData::Union(typ) => self.write_union(typ),
@@ -375,6 +413,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_class(&mut self, typ: ClassType) -> Result<()> {
+        println!("write_class: {:?}", typ);
         let ClassType { kind, properties, fields, derived_from, name, size, .. } = typ;
         self.current_type = Some(self.ident(&name));
         assert_eq!(derived_from, None);
@@ -420,7 +459,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         self.current_type = Some(self.ident(&name));
         write!(self.writer, "{}#[repr(", self.indent)?;
         let repr_typ = self.find(underlying_type)?;
-        let size = size(&repr_typ);
+        let size = self.size(&repr_typ)?;
         self.write_member_type(repr_typ)?;
         writeln!(self.writer, ")]")?;
         writeln!(self.writer, "{}pub enum {} {{", self.indent, name.to_ident())?;
@@ -435,13 +474,18 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_field_list(&mut self, fields: TypeIndex) -> Result<()> {
+        let mut members = Vec::new();
         match self.find(fields)? {
             TypeData::FieldList(list) => {
+                println!("write_field_list: {:#?}", list);
                 for field in list.fields {
                     match field {
                         TypeData::BaseClass(typ) => self.write_field_base_class(typ)?,
-                        TypeData::Member(typ) => self.write_member(typ)?,
-                        TypeData::VirtualFunctionTablePointer(typ) => self.write_field_virtual_function_table_pointer(typ)?,
+                        TypeData::Member(typ) => members.push((typ.offset, typ)),
+                        TypeData::VirtualFunctionTablePointer(typ) => {
+                            assert_eq!(members.len(), 0);
+                            self.write_field_virtual_function_table_pointer(typ)?
+                        },
                         TypeData::Enumerate(typ) => self.write_field_enumerate(typ)?,
                         TypeData::MemberFunction(_) => {},
                         TypeData::OverloadedMethod(_) => {},
@@ -454,6 +498,8 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             }
             _ => panic!("Not a FieldList")
         }
+        members.sort_by_key(|(offset, _)| offset);
+        
         Ok(())
     }
 
@@ -480,7 +526,14 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             TypeData::Bitfield(typ) => self.write_member_bitfield(typ)?,
             TypeData::Union(typ) => self.write_member_union(typ)?,
             TypeData::Array(typ) => self.write_member_array(typ)?,
-            t => unimplemented!("write_member: {:?}", t)
+            TypeData::Modifier(typ) => {
+                if typ.constant {
+                    write!(self.writer, "const ")?;
+                }
+                let typ = self.find(typ.underlying_type)?;
+                self.write_member_type(typ)?;
+            }
+            t => unimplemented!("write_member_type: {:?}", t)
         }
         Ok(())
     }
@@ -568,12 +621,42 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_member_pointer(&mut self, typ: PointerType) -> Result<()> {
-        if typ.attributes.is_const() {
+        let underlying = self.find(typ.underlying_type)?;
+        let (underlying, constant) = match underlying {
+            TypeData::Modifier(ModifierType { underlying_type, constant, .. }) => (self.find(underlying_type)?, constant),
+            TypeData::Procedure(_) | TypeData::MemberFunction(_) => {
+                // TODO: actual parameters
+                write!(self.writer, "*const fn()")?;
+                return Ok(());
+            }
+            TypeData::Pointer(ptr) => {
+                // TODO: duplicated code
+                if typ.attributes.is_const() {
+                    write!(self.writer, "*const ")?;
+                } else {
+                    write!(self.writer, "*mut ")?;
+                }
+                self.write_member_pointer(ptr)?;
+                return Ok(())
+            }
+            TypeData::Primitive(prim) => {
+                // TODO: triplicated code
+                if typ.attributes.is_const() {
+                    write!(self.writer, "*const ")?;
+                } else {
+                    write!(self.writer, "*mut ")?;
+                }
+                self.write_member_primitive(prim)?;
+                return Ok(())
+            }
+            underlying => (underlying, false),
+        };
+        // TODO: duplicated code
+        if typ.attributes.is_const() || constant {
             write!(self.writer, "*const ")?;
         } else {
             write!(self.writer, "*mut ")?;
         }
-        let underlying = self.find(typ.underlying_type)?;
         let name = self.ident(&underlying.name().unwrap());
         write!(self.writer, "{}", name)?;
         self.add_stub(underlying);
@@ -613,7 +696,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         // TODO: do this correctly
         assert_eq!(dimensions.len(), 1);
         let underlying = self.find(element_type)?;
-        let size = size(&underlying);
+        let size = self.size(&underlying)?;
         write!(self.writer, "[")?;
         self.write_member_type(underlying)?;
         write!(self.writer, "; {}]", dimensions[0] as usize / size)?;
@@ -626,6 +709,49 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             writeln!(self.writer)?;
         }
         Ok(())
+    }
+
+    fn size(&self, typ: &TypeData) -> Result<usize> {
+        let res = match typ {
+            &TypeData::Primitive(typ) => match typ.kind {
+                PrimitiveKind::Void => 0,
+                PrimitiveKind::Char => 1,
+                PrimitiveKind::UChar => 1,
+                PrimitiveKind::RChar => 1,
+                PrimitiveKind::WChar => 4,
+                PrimitiveKind::I8 => 1,
+                PrimitiveKind::U8 => 1,
+                PrimitiveKind::I16 => 2,
+                PrimitiveKind::U16 => 2,
+                PrimitiveKind::I32 => 4,
+                PrimitiveKind::U32 => 4,
+                PrimitiveKind::I64 => 8,
+                PrimitiveKind::U64 => 8,
+                PrimitiveKind::I128 => 16,
+                PrimitiveKind::U128 => 16,
+                PrimitiveKind::F16 => 2,
+                PrimitiveKind::F32 => 4,
+                PrimitiveKind::F48 => 6,
+                PrimitiveKind::F64 => 8,
+                PrimitiveKind::F80 => 10,
+                PrimitiveKind::F128 => 16,
+                PrimitiveKind::Bool8 => 1,
+                PrimitiveKind::Bool16 => 2,
+                PrimitiveKind::Bool32 => 4,
+                PrimitiveKind::Bool64 => 8,
+                t => unimplemented!("size: primitive: {:?}", t)
+            },
+            &TypeData::Class(ref class) => class.size as usize,
+            &TypeData::Array(ArrayType { element_type, ref dimensions, .. }) if dimensions.len() == 1 => {
+                let typ = self.find(element_type)?;
+                let size = self.size(&typ)?;
+                size * dimensions[0] as usize
+            }
+            // TODO: Actually find out pdb platform pointer size
+            &TypeData::Pointer(_) => 4,
+            t => unimplemented!("size: {:?}", t)
+        };
+        Ok(res)
     }
 
     // TODO: Convert bitfields into bitflags
@@ -646,39 +772,77 @@ impl From<Bool{0}> for bool {{
 }}"#, size)
 }
 
-fn size(typ: &TypeData) -> usize {
-    match typ {
-        &TypeData::Primitive(typ) => match typ.kind {
-            PrimitiveKind::Void => 0,
-            PrimitiveKind::Char => 1,
-            PrimitiveKind::UChar => 1,
-            PrimitiveKind::RChar => 1,
-            PrimitiveKind::WChar => 4,
-            PrimitiveKind::I8 => 1,
-            PrimitiveKind::U8 => 1,
-            PrimitiveKind::I16 => 2,
-            PrimitiveKind::U16 => 2,
-            PrimitiveKind::I32 => 4,
-            PrimitiveKind::U32 => 4,
-            PrimitiveKind::I64 => 8,
-            PrimitiveKind::U64 => 8,
-            PrimitiveKind::I128 => 16,
-            PrimitiveKind::U128 => 16,
-            PrimitiveKind::F16 => 2,
-            PrimitiveKind::F32 => 4,
-            PrimitiveKind::F48 => 6,
-            PrimitiveKind::F64 => 8,
-            PrimitiveKind::F80 => 10,
-            PrimitiveKind::F128 => 16,
-            PrimitiveKind::Bool8 => 1,
-            PrimitiveKind::Bool16 => 2,
-            PrimitiveKind::Bool32 => 4,
-            PrimitiveKind::Bool64 => 8,
-            t => unimplemented!("size: primitive: {:?}", t)
-        },
-        &TypeData::Class(ref class) => class.size as usize,
-        t => unimplemented!("size: {:?}", t)
+#[derive(Debug)]
+enum Generic<'a> {
+    Type(&'a str),
+    Number(u64),
+    Multiple(Vec<Generic<'a>>),
+    Inner(&'a str, Box<Generic<'a>>),
+}
+
+fn parse_generics(s: &str) -> Generic {
+    let list = split_list(s);
+    assert!(list.len() >= 1);
+
+    if list.len() == 1 {
+        let s = list[0];
+        if let Some((i, inner)) = get_between(s, '<', '>') {
+            let name = &s[..i];
+            let inner = Box::new(parse_generics(inner));
+            return Generic::Inner(name, inner);
+        } else {
+            if let Ok(num) = s.parse() {
+                return Generic::Number(num);
+            } else {
+                return Generic::Type(s);
+            }
+        }
     }
+
+    let mut res = Vec::new();
+    for s in list {
+        res.push(parse_generics(s));
+    }
+    Generic::Multiple(res)
+}
+
+/// Returns a tuple of the first index of start and everything between the start and end characters
+/// including inner appearances of start and end.
+fn get_between(s: &str, start: char, end: char) -> Option<(usize, &str)> {
+    let mut level = 1;
+    let start_index = s.find(start)?;
+    let search_in = &s[start_index+1 ..];
+    for (i, c) in search_in.char_indices() {
+        match c {
+            c if c == start => level += 1,
+            c if c == end => level -= 1,
+            _ => {},
+        }
+        if level == 0 {
+            assert!(search_in.len() == i + 1 || search_in.chars().nth(i+1) == Some(':'));
+            return Some((start_index, &search_in[.. i]));
+        }
+    }
+    None
+}
+
+fn split_list(s: &str) -> Vec<&str> {
+    let mut level = 0;
+    let mut last_split = 0;
+    let mut res = Vec::new();
+    for (i, c) in s.char_indices() {
+        match c {
+            '<' => level += 1,
+            '>' => level -= 1,
+            ',' if level == 0 => {
+                res.push(&s[last_split..i]);
+                last_split = i + 1;
+            }
+            _ => {}
+        }
+    }
+    res.push(&s[last_split..]);
+    res
 }
 
 trait ToIdent<'a> {
