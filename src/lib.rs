@@ -161,13 +161,25 @@ impl<P: AsRef<Path>> PdbExtract<P> {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+struct CustomUnion<'t> {
+    name: String,
+    fields: Vec<Vec<MemberType<'t>>>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum Todo<'t> {
+    TypeData(TypeData<'t>),
+    CustomUnion(CustomUnion<'t>),
+}
+
 struct Writer<'t, W: Write> {
     writer: W,
     ignore: Vec<String>,
     replace: Vec<(Regex, String)>,
     finder: TypeFinder<'t>,
     written: Vec<TypeData<'t>>,
-    todo: VecDeque<TypeData<'t>>,
+    todo: VecDeque<Todo<'t>>,
     stubs: Vec<TypeData<'t>>,
     name_map: HashMap<String, Option<TypeIndex>>,
     indent: String,
@@ -244,7 +256,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         let mut todo = VecDeque::with_capacity(structs.len());
         for name in structs {
             match name_map.get(&name).cloned() {
-                Some(Some(idx)) => todo.push_back(find(&finder, &name_map, idx)?),
+                Some(Some(idx)) => todo.push_back(Todo::TypeData(find(&finder, &name_map, idx)?)),
                 Some(None) => panic!("{} found multiple times", name),
                 None => panic!("{} not found", name)
             }
@@ -310,14 +322,14 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         if self.written.contains(&typ) {
             return;
         }
-        if self.todo.contains(&typ) {
+        if self.todo.contains(&Todo::TypeData(typ.clone())) {
             return;
         }
         if let Some(pos) = self.stubs.iter().position(|e| *e == typ) {
             self.stubs.remove(pos);
         }
         self.add_generics(&typ, Self::add_todo);
-        self.todo.push_back(typ);
+        self.todo.push_back(Todo::TypeData(typ));
     }
 
     fn add_stub(&mut self, typ: TypeData<'t>) {
@@ -329,7 +341,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         if self.written.contains(&typ) {
             return;
         }
-        if self.todo.contains(&typ) {
+        if self.todo.contains(&Todo::TypeData(typ.clone())) {
             return;
         }
         if self.stubs.contains(&typ) {
@@ -384,7 +396,9 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     fn do_your_thing(&mut self) -> Result<()> {
         while !self.todo.is_empty() {
             let next = self.todo.pop_front().unwrap();
-            self.written.push(next.clone());
+            if let &Todo::TypeData(ref next) = &next {
+                self.written.push(next.clone());
+            }
             self.write(next)?;
         }
         while !self.stubs.is_empty() {
@@ -396,12 +410,12 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         Ok(())
     }
 
-    fn write(&mut self, data: TypeData) -> Result<()> {
-        println!("write: {:?}", data);
+    fn write(&mut self, data: Todo) -> Result<()> {
         match data {
-            TypeData::Class(typ) => self.write_class(typ),
-            TypeData::Union(typ) => self.write_union(typ),
-            TypeData::Enumeration(typ) => self.write_enumeration(typ),
+            Todo::TypeData(TypeData::Class(typ)) => self.write_class(typ),
+            Todo::TypeData(TypeData::Union(typ)) => self.write_union(typ),
+            Todo::TypeData(TypeData::Enumeration(typ)) => self.write_enumeration(typ),
+            Todo::CustomUnion(typ) => self.write_custom_union(typ),
             t => unimplemented!("write: {:?}", t)
         }
     }
@@ -417,7 +431,6 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_class(&mut self, typ: ClassType) -> Result<()> {
-        println!("write_class: {:?}", typ);
         let ClassType { kind, properties, fields, derived_from, name, size, .. } = typ;
         self.current_type = Some(self.ident(&name));
         assert_eq!(derived_from, None);
@@ -458,6 +471,40 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         Ok(())
     }
 
+    fn write_custom_union(&mut self, typ: CustomUnion) -> Result<()> {
+        let mut structs = Vec::new();
+        writeln!(self.writer, "{}#[repr(C)]", self.indent)?;
+        writeln!(self.writer, "{}pub union {} {{", self.indent, typ.name)?;
+        self.indent += "    ";
+        for mut fields in typ.fields {
+            if fields.len() > 1 {
+                let name = format!("{}_Struct{}", typ.name, structs.len());
+                writeln!(self.writer, "{}struct{}: {},", self.indent, structs.len(), name)?;
+                structs.push((name, fields));
+            } else {
+                self.write_member(fields.remove(0))?;
+            }
+        }
+        let len = self.indent.len();
+        self.indent.truncate(len - 4);
+        writeln!(self.writer, "{}}}", self.indent)?;
+        writeln!(self.writer)?;
+
+        for (name, members) in structs {
+            writeln!(self.writer, "{}#[repr(C)]", self.indent)?;
+            writeln!(self.writer, "{}pub struct {} {{", self.indent, name)?;
+            self.indent += "    ";
+            for member in members {
+                self.write_member(member)?;
+            }
+            let len = self.indent.len();
+            self.indent.truncate(len - 4);
+            writeln!(self.writer, "{}}}", self.indent)?;
+            writeln!(self.writer)?;
+        }
+        Ok(())
+    }
+
     fn write_enumeration(&mut self, typ: EnumerationType) -> Result<()> {
         let EnumerationType { underlying_type, fields, name, .. } = typ;
         self.current_type = Some(self.ident(&name));
@@ -478,14 +525,13 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_field_list(&mut self, fields: TypeIndex) -> Result<()> {
-        let mut members = Vec::new();
+        let mut members = VecDeque::new();
         match self.find(fields)? {
             TypeData::FieldList(list) => {
-                println!("write_field_list: {:#?}", list);
                 for field in list.fields {
                     match field {
                         TypeData::BaseClass(typ) => self.write_field_base_class(typ)?,
-                        TypeData::Member(typ) => members.push((typ.offset, typ)),
+                        TypeData::Member(typ) => members.push_back((typ.offset, typ)),
                         TypeData::VirtualFunctionTablePointer(typ) => {
                             assert_eq!(members.len(), 0);
                             self.write_field_virtual_function_table_pointer(typ)?
@@ -502,8 +548,43 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             }
             _ => panic!("Not a FieldList")
         }
-        members.sort_by_key(|(offset, _)| offset);
-        
+
+        let mut union_number = 0;
+        while let Some((offset, member)) = members.pop_front() {
+            if members.iter().any(|&(o, _)| o == offset) {
+                let mut components = Vec::new();
+                let mut size = None;
+                // Until we reach the last member of the union, we can just get all fields until the offset repeats.
+                members.push_front((member.offset, member));
+                while let Some(pos) = members.iter().skip(1).position(|&(o, _)| o == offset) {
+                    let fields: Vec<_> = members.drain(..pos+1).map(|(_,m)| m).collect();
+                    let new_size = fields.iter().fold(0, |size, m| size + self.size(&self.find(m.field_type).unwrap()).unwrap());
+                    if let Some(size) = size {
+                        assert_eq!(size, new_size);
+                    } else {
+                        size = Some(new_size);
+                    }
+                    components.push(fields);
+                }
+                // The last fields must have the same size as all previous fields
+                let mut fields = Vec::new();
+                let mut new_size = 0;
+                let size = size.unwrap();
+                while new_size < size {
+                    let (_, member) = members.pop_front().expect("last union member smaller than previous ones");
+                    new_size += self.size(&self.find(member.field_type)?)?;
+                    fields.push(member);
+                }
+                assert_eq!(new_size, size, "last union member larger than previous ones");
+                components.push(fields);
+                let name = format!("{}_Union{}", self.current_type.as_ref().unwrap(), union_number);
+                writeln!(self.writer, "{}union{}: {},", self.indent, union_number, name)?;
+                self.todo.push_front(Todo::CustomUnion(CustomUnion { name, fields: components }));
+                union_number += 1;
+            } else {
+                self.write_member(member)?;
+            }
+        }
         Ok(())
     }
 
