@@ -40,8 +40,12 @@ use pdb::{
 pub enum Error {
     #[fail(display = "pdb error: {}", err)]
     Pdb {
-        err: PdbError
+        err: PdbError,
     },
+    #[fail(display = "not yet implemented: {}", cause)]
+    Unimplemented {
+        cause: String,
+    }
 }
 
 impl From<PdbError> for Error {
@@ -96,7 +100,7 @@ impl<P: AsRef<Path>> PdbExtract<P> {
         let s = String::from_utf8(writer_internal).unwrap();
         let mut lines = s.lines();
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^(\s+)(\w+): Bitfield(\d+)_(\d+)(\w+),$").unwrap();
+            static ref RE: Regex = Regex::new(r"^(\s+)(\w+): Bitfield(\d+)_(\d+)(\w+),(:? // 0x[0-9a-fA-F]{3,})?$").unwrap();
             static ref TYP: Regex = Regex::new(r"^(?:i|u|Bool)(\d+)$").unwrap();
         }
         let mut bitfield_num = 0;
@@ -173,6 +177,13 @@ enum Todo<'t> {
     CustomUnion(CustomUnion<'t>),
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum CurrentType {
+    Class,
+    Enum,
+    Union,
+}
+
 struct Writer<'t, W: Write> {
     writer: W,
     ignore: Vec<String>,
@@ -183,8 +194,10 @@ struct Writer<'t, W: Write> {
     stubs: Vec<TypeData<'t>>,
     name_map: HashMap<String, Option<TypeIndex>>,
     indent: String,
-    current_type: Option<String>,
+    current_type: Option<CurrentType>,
+    current_type_name: Option<String>,
     current_base_class: Option<String>,
+    union_number: usize,
 }
 
 fn find<'t>(finder: &TypeFinder<'t>, map: &HashMap<String, Option<TypeIndex>>, index: TypeIndex) -> Result<TypeData<'t>> {
@@ -272,7 +285,9 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             name_map,
             indent: "".to_string(),
             current_type: None,
+            current_type_name: None,
             current_base_class: None,
+            union_number: 0,
         })
     }
 
@@ -391,6 +406,8 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
 
     fn cleanup(&mut self) {
         self.current_type = None;
+        self.current_type_name = None;
+        self.union_number = 0;
     }
 
     fn do_your_thing(&mut self) -> Result<()> {
@@ -432,7 +449,8 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
 
     fn write_class(&mut self, typ: ClassType) -> Result<()> {
         let ClassType { kind, properties, fields, derived_from, name, size, .. } = typ;
-        self.current_type = Some(self.ident(&name));
+        self.current_type_name = Some(self.ident(&name));
+        self.current_type = Some(CurrentType::Class);
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         if properties.packed() {
@@ -458,7 +476,8 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
 
     fn write_union(&mut self, typ: UnionType) -> Result<()> {
         let UnionType { fields, size, name, ..} = typ;
-        self.current_type = Some(self.ident(&name));
+        self.current_type_name = Some(self.ident(&name));
+        self.current_type = Some(CurrentType::Union);
         writeln!(self.writer, "{}#[repr(C)]", self.indent)?;
         writeln!(self.writer, "{}pub union {} {{", self.indent, name.to_ident())?;
         self.indent += "    ";
@@ -507,7 +526,8 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
 
     fn write_enumeration(&mut self, typ: EnumerationType) -> Result<()> {
         let EnumerationType { underlying_type, fields, name, .. } = typ;
-        self.current_type = Some(self.ident(&name));
+        self.current_type_name = Some(self.ident(&name));
+        self.current_type = Some(CurrentType::Enum);
         write!(self.writer, "{}#[repr(", self.indent)?;
         let repr_typ = self.find(underlying_type)?;
         let size = self.size(&repr_typ)?;
@@ -549,38 +569,56 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
             _ => panic!("Not a FieldList")
         }
 
-        let mut union_number = 0;
         while let Some((offset, member)) = members.pop_front() {
-            if members.iter().any(|&(o, _)| o == offset) {
+            // TODO: Fix this horror
+            if self.current_type == Some(CurrentType::Class)
+                    && members.iter().any(|&(o, ref m)| {
+                let is_bitfield = if let TypeData::Bitfield(_) = self.find(m.field_type).unwrap() { true } else { false };
+                o == offset && !is_bitfield
+            }) {
                 let mut components = Vec::new();
-                let mut size = None;
+                let mut max_size = None;
                 // Until we reach the last member of the union, we can just get all fields until the offset repeats.
                 members.push_front((member.offset, member));
-                while let Some(pos) = members.iter().skip(1).position(|&(o, _)| o == offset) {
+                while let Some(pos) = members.iter().skip(1).position(|&(o, ref m)| {
+                    let is_bitfield = if let TypeData::Bitfield(_) = self.find(m.field_type).unwrap() { true } else { false };
+                    o == offset && !is_bitfield
+                }) {
                     let fields: Vec<_> = members.drain(..pos+1).map(|(_,m)| m).collect();
-                    let new_size = fields.iter().fold(0, |size, m| size + self.size(&self.find(m.field_type).unwrap()).unwrap());
-                    if let Some(size) = size {
-                        assert_eq!(size, new_size);
-                    } else {
-                        size = Some(new_size);
+                    let new_size = fields.iter().fold(Some(0), |size, m| {
+                        size.and_then(|size| {
+                            self.find(m.field_type).and_then(|typ| self.size(&typ))
+                                .map(|s| size + s).ok()
+                        })
+                    });
+                    if max_size.is_some() && new_size.is_some() && new_size.unwrap() > max_size.unwrap() {
+                        max_size = new_size
+                    } else if max_size.is_none() && new_size.is_some() {
+                        max_size = new_size;
                     }
                     components.push(fields);
                 }
-                // The last fields must have the same size as all previous fields
-                let mut fields = Vec::new();
-                let mut new_size = 0;
-                let size = size.unwrap();
-                while new_size < size {
-                    let (_, member) = members.pop_front().expect("last union member smaller than previous ones");
-                    new_size += self.size(&self.find(member.field_type)?)?;
-                    fields.push(member);
-                }
-                assert_eq!(new_size, size, "last union member larger than previous ones");
+                // The first field after the last union member must have a higher offset
+                // than the current offset + size of the union.
+                // The last member of the union might actually be larger than previous ones,
+                // but we can not get that information from the debug type information.
+                // If it is in fact larger, the additional fields will be represented as regular
+                // member types of the struct.
+                let fields = if let None = max_size {
+                    // TODO: actual size handling for bitfields
+                    eprintln!("I have no idea how large a union of {:?} is", self.current_type_name.as_ref().unwrap());
+                    vec![members.pop_front().unwrap().1]
+                } else {
+                    let pos = members.iter()
+                        .position(|&(o, _)| o as usize > offset as usize + max_size.unwrap())
+                        .unwrap_or(members.len());
+                    members.drain(..pos).map(|(_, m)| m).collect()
+                };
                 components.push(fields);
-                let name = format!("{}_Union{}", self.current_type.as_ref().unwrap(), union_number);
-                writeln!(self.writer, "{}union{}: {},", self.indent, union_number, name)?;
+                let name = format!("{}_Union{}", self.current_type_name.as_ref().unwrap(), self.union_number);
+                writeln!(self.writer, "{}union{}: {},", self.indent, self.union_number, name)?;
                 self.todo.push_front(Todo::CustomUnion(CustomUnion { name, fields: components }));
-                union_number += 1;
+                self.union_number += 1;
             } else {
                 self.write_member(member)?;
             }
@@ -589,7 +627,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_member(&mut self, typ: MemberType) -> Result<()> {
-        let MemberType { attributes, field_type, name, .. } = typ;
+        let MemberType { attributes, field_type, name, offset, .. } = typ;
         if attributes.is_static() || attributes.is_virtual()
                 || attributes.is_pure_virtual() || attributes.is_intro_virtual() {
             eprintln!("found nonrelevant member: {}", name);
@@ -598,7 +636,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
         write!(self.writer, "{}{}: ", self.indent, name.to_ident())?;
         let inner = self.find(field_type)?;
         self.write_member_type(inner)?;
-        writeln!(self.writer, ",")?;
+        writeln!(self.writer, ", // {:#05x}", offset)?;
         Ok(())
     }
 
@@ -649,7 +687,7 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
     }
 
     fn write_field_virtual_function_table_pointer(&mut self, _: VirtualFunctionTablePointerType) -> Result<()> {
-        let name = self.current_base_class.as_ref().or(self.current_type.as_ref()).unwrap();
+        let name = self.current_base_class.as_ref().or(self.current_type_name.as_ref()).unwrap();
         writeln!(self.writer, "{}vtable_{}: *const (),", self.indent, name)?;
         Ok(())
     }
@@ -827,14 +865,12 @@ impl<'t, 's, W: Write> Writer<'t, W> where 's: 't {
                 t => unimplemented!("size: primitive: {:?}", t)
             },
             &TypeData::Class(ref class) => class.size as usize,
-            &TypeData::Array(ArrayType { element_type, ref dimensions, .. }) if dimensions.len() == 1 => {
-                let typ = self.find(element_type)?;
-                let size = self.size(&typ)?;
-                size * dimensions[0] as usize
+            &TypeData::Array(ArrayType { ref dimensions, .. }) if dimensions.len() == 1 => {
+                dimensions[0] as usize
             }
             // TODO: Actually find out pdb platform pointer size
             &TypeData::Pointer(_) => 4,
-            t => unimplemented!("size: {:?}", t)
+            t => return Err(Error::Unimplemented { cause: format!("size: {:?}", t) }.into())
         };
         Ok(res)
     }
