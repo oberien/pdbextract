@@ -2,6 +2,9 @@ extern crate pdb;
 extern crate regex;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate failure;
+extern crate multimap;
+
+mod ir;
 
 use std::fs::File;
 use std::path::Path;

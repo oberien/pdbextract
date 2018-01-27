@@ -8,6 +8,7 @@ pdb = "0.2.0"
 failure = "0.1.1"
 regex = "0.2"
 lazy_static = "1.0"
+multimap = "0.4"
 
 [profile.release]
 debug = true
