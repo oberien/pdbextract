@@ -5,7 +5,7 @@ use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassT
           PointerType, BitfieldType, ArrayType, ModifierType};
 
 use ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size,
-         Union};
+         Union, Arena};
 
 pub struct Class {
     pub name: Name,
@@ -36,26 +36,69 @@ impl Class {
             }
         }
         let name: Name = name.into();
-        // unions
+        let members = Class::transform_unions(converter.arena, &name, members);
+        Ok(Class {
+            name,
+            kind,
+            members,
+            properties: properties.into(),
+            size: size as usize,
+        })
+    }
+
+    /// Converts inline-lying unions into actual unions
+    // Assume the following C++ struct with anonymous unions.
+    // struct S {
+    //   union {
+    //     int a;
+    //     struct {
+    //       int ba;
+    //       int bb;
+    //     } b;
+    //     struct {
+    //       int ca;
+    //       int cb;
+    //       int cc;
+    //     } c;
+    //   } u;
+    // };
+    //
+    // This will be described in the pdb like this:
+    // a : offset 0
+    // ba: offset 0
+    // bb: offset 4
+    // ca: offset 0
+    // cb: offset 4
+    // cc: offset 8
+    //
+    // To generate rust types, we need to detect these unions and create new types for them.
+    // For simplification, for each union field, we create a new struct.
+    fn transform_unions(arena: &mut Arena, name: &Name, mut members: VecDeque<ClassMember>) -> Vec<ClassMember> {
         let mut res = Vec::new();
         let mut union_number = 0;
+
         while let Some(member) = members.pop_front() {
             let offset = member.offset();
             // if we have a union
-            if let Some(position) = members.iter().skip(1).position(|m| m.offset() == offset) {
+            if let Some(position) = members.iter().position(|m| m.offset() == offset) {
                 members.push_front(member);
                 let mut union_fields = Vec::new();
                 let mut max_size = 0;
-                while let Some(position) = members.iter().position(|m| m.offset() == offset) {
+
+                // while the union has more fields
+                while let Some(position) = members.iter().skip(1).position(|m| m.offset() == offset) {
+                    // we consume all fields of the anonymous struct of this union field
                     let mut union_struct: Vec<_> = members.drain(..position).collect();
                     let last = &union_struct[union_struct.len()-1];
-                    let size = last.offset() - offset + last.size(converter.arena);
+                    let size = last.offset() - offset + last.size(arena);
                     max_size = cmp::max(max_size, size);
+
+                    // create union-field-struct
                     union_fields.push(ClassField {
                         attributes: Attributes::default(),
                         name: format!("struct{}", union_fields.len()).into(),
                         offset: 0,
-                        kind: ClassFieldKind::Class(converter.arena.insert_custom_class(Class {
+                        kind: ClassFieldKind::Class(arena.insert_custom_class(Class {
                             name: format!("{}_Union{}_Struct{}", name.ident, union_number, union_fields.len()).into(),
                             kind: ClassKind::Struct,
                             members: union_struct,
@@ -64,12 +107,13 @@ impl Class {
                         })),
                     });
                 }
+
                 // The first field after the last union member must have a higher offset
                 // than the current offset + size of the union.
                 // The last member of the union might actually be larger than previous ones,
                 // but we can not get that information from the debug type information.
                 // If it is in fact larger, the additional fields will be represented as regular
-                // member types of the struct.
+                // members of the struct.
                 let union_struct = if max_size == 0 {
                     eprintln!("I have no idea how large a union of {:?} is", name);
                     vec![members.pop_front().unwrap()]
@@ -85,7 +129,7 @@ impl Class {
                     attributes: Attributes::default(),
                     name: format!("struct{}", union_fields.len()).into(),
                     offset: 0,
-                    kind: ClassFieldKind::Class(converter.arena.insert_custom_class(Class {
+                    kind: ClassFieldKind::Class(arena.insert_custom_class(Class {
                         name: format!("{}_Union{}_Struct{}", name.ident, union_number, union_fields.len()).into(),
                         kind: ClassKind::Struct,
                         members: union_struct,
@@ -93,13 +137,15 @@ impl Class {
                         size: max_size,
                     })),
                 });
+                // We have created all union-field-structs. Now we create the actual union
+                // and set it as field of the class we're currently analyzing.
                 union_number += 1;
                 let count = union_fields.len() as u16;
                 res.push(ClassMember::Field(ClassField {
                     attributes: Attributes::default(),
                     name: format!("union{}", union_number).into(),
                     offset,
-                    kind: ClassFieldKind::Union(converter.arena.insert_custom_union(Union {
+                    kind: ClassFieldKind::Union(arena.insert_custom_union(Union {
                         name: format!("{}_Union{}", name.ident, union_number).into(),
                         fields: union_fields,
                         properties: Properties::default(),
@@ -111,13 +157,7 @@ impl Class {
                 res.push(member);
             }
         }
-        Ok(Class {
-            name,
-            kind,
-            members: res,
-            properties: properties.into(),
-            size: size as usize,
-        })
+        res
     }
 }
 
