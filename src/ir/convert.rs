@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use pdb::{self, FallibleIterator, TypeInformation, TypeFinder, Error as PdbError, TypeData};
 use multimap::MultiMap;
 
@@ -5,7 +7,7 @@ use ir::{Arena, Result, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionInde
 
 pub struct Converter<'a, 't> {
     pub(in ir) finder: TypeFinder<'t>,
-    types: Vec<pdb::TypeIndex>,
+    types: VecDeque<pdb::TypeIndex>,
     pub(in ir) arena: &'a mut Arena,
 }
 
@@ -13,7 +15,7 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
     pub fn new(info: &'t mut TypeInformation<'s>, arena: &'a mut Arena) -> Result<Converter<'a, 't>> {
         let mut finder = info.new_type_finder();
         let mut iter = info.iter();
-        let mut types = Vec::new();
+        let mut types = VecDeque::new();
         while let Some(typ) = iter.next()? {
             finder.update(&iter);
             match typ.parse() {
@@ -28,7 +30,7 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
                         println!("ignore: {:?}", t);
                         continue;
                     }
-                    types.push(typ.type_index());
+                    types.push_back(typ.type_index());
                 }
                 Err(PdbError::UnimplementedTypeKind(_)) => {},
                 Err(e) => Err(e)?,
@@ -42,7 +44,7 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
     }
 
     pub fn populate(&mut self) -> Result<()> {
-        for idx in self.types.clone() {
+        while let Some(idx) = self.types.pop_front() {
             self.convert(idx)?;
         }
         Ok(())

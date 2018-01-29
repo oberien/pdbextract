@@ -90,6 +90,12 @@ impl Size for Enum {
 
 impl Size for Bitfield {
     fn size(&self, arena: &Arena) -> usize {
+        self.fields.iter().map(|f| f.size(arena)).max().unwrap()
+    }
+}
+
+impl Size for BitfieldField {
+    fn size(&self, arena: &Arena) -> usize {
         match self.underlying {
             BitfieldUnderlying::Primitive(primitive) => primitive.size(arena),
             BitfieldUnderlying::Enum(e) => arena[e].size(arena),

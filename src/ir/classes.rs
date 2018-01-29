@@ -37,6 +37,7 @@ impl Class {
         }
         let name: Name = name.into();
         let members = Class::transform_unions(converter.arena, &name, members);
+        let members = Class::transform_bitfields(&name, members);
         Ok(Class {
             name,
             kind,
@@ -73,8 +74,8 @@ impl Class {
     //
     // To generate rust types, we need to detect these unions and create new types for them.
     // For simplification, for each union field, we create a new struct.
-    fn transform_unions(arena: &mut Arena, name: &Name, mut members: VecDeque<ClassMember>) -> Vec<ClassMember> {
-        let mut res = Vec::new();
+    fn transform_unions(arena: &mut Arena, name: &Name, mut members: VecDeque<ClassMember>) -> VecDeque<ClassMember> {
+        let mut res = VecDeque::with_capacity(members.len());
         let mut union_number = 0;
 
         while let Some(member) = members.pop_front() {
@@ -141,7 +142,7 @@ impl Class {
                 // and set it as field of the class we're currently analyzing.
                 union_number += 1;
                 let count = union_fields.len() as u16;
-                res.push(ClassMember::Field(ClassField {
+                res.push_back(ClassMember::Field(ClassField {
                     attributes: Attributes::default(),
                     name: format!("union{}", union_number).into(),
                     offset,
@@ -154,6 +155,55 @@ impl Class {
                     })),
                 }));
             } else {
+                res.push_back(member);
+            }
+        }
+        res
+    }
+
+    fn transform_bitfields(name: &Name, mut members: VecDeque<ClassMember>) -> Vec<ClassMember> {
+        let mut res = Vec::with_capacity(members.len());
+        let mut bitfield_number = 0;
+        let mut pos = usize::max_value();
+        let mut offset = 0;
+        let mut fields = Vec::new();
+        while let Some(member) = members.pop_front() {
+            if let ClassMember::Field(ClassField { offset: offs, kind: ClassFieldKind::Bitfield(mut b), .. }) = member {
+                assert_eq!(b.fields.len(), 1);
+                let field = b.fields.pop().unwrap();
+                if field.position < pos && !fields.is_empty() {
+                    // new bitfield after bitfield, need to finish old one
+                    res.push(ClassMember::Field(ClassField {
+                        attributes: Attributes::default(),
+                        name: format!("bitfield{}", bitfield_number).into(),
+                        offset,
+                        kind: ClassFieldKind::Bitfield(Bitfield {
+                            fields,
+                        })
+                    }));
+                    bitfield_number += 1;
+                    offset = offs;
+                    pos = field.position;
+                    fields = vec![field];
+                } else {
+                    offset = offs;
+                    fields.push(field);
+                }
+            } else {
+                // if we had a bitfield before, we need to finish it
+                if !fields.is_empty() {
+                    res.push(ClassMember::Field(ClassField {
+                        attributes: Attributes::default(),
+                        name: format!("bitfield{}", bitfield_number).into(),
+                        offset,
+                        kind: ClassFieldKind::Bitfield(Bitfield {
+                            fields,
+                        })
+                    }));
+                    pos = usize::max_value();
+                    bitfield_number += 1;
+                    fields = Vec::new();
+                }
                 res.push(member);
             }
         }
@@ -354,35 +404,47 @@ impl From<TypeProperties> for Properties {
     }
 }
 
+pub struct Bitfield {
+    pub fields: Vec<BitfieldField>,
+}
+
+impl Bitfield {
+    pub fn from(converter: &mut Converter, bitfield: BitfieldType) -> Result<Bitfield> {
+        // We can only get a single bitfield here. Later, we'll make a second pass to
+        // collect adjacent bitfield fields into a single large bitfield.
+        Ok(Bitfield {
+            fields: vec![BitfieldField::from(converter, bitfield)?],
+        })
+    }
+}
+
 pub enum BitfieldUnderlying {
     Primitive(PrimitiveKind),
     Enum(EnumIndex),
 }
 
-pub struct Bitfield {
+pub struct BitfieldField {
     pub underlying: BitfieldUnderlying,
-    pub length: u8,
-    pub position: u8,
+    pub length: usize,
+    pub position: usize,
 }
 
-impl Bitfield {
-    pub fn from(converter: &mut Converter, bitfield: BitfieldType) -> Result<Bitfield> {
-        // TODO: actually do bitfields correctly
+impl BitfieldField {
+    pub fn from(converter: &mut Converter, bitfield: BitfieldType) -> Result<BitfieldField> {
         let BitfieldType { length, position, underlying_type } = bitfield;
         let typ = converter.finder.find(underlying_type)?.parse()?;
 
-        let underlying = if let TypeData::Primitive(primitive) = typ {
-            BitfieldUnderlying::Primitive(primitive.kind)
-        } else if let TypeData::Enumeration(typ) = typ {
-            BitfieldUnderlying::Enum(converter.convert_enum(underlying_type)?)
-        } else {
-            panic!("Bitfield is {:?}", typ)
+        let underlying = match typ {
+            TypeData::Primitive(primitive) => BitfieldUnderlying::Primitive(primitive.kind),
+            TypeData::Enumeration(typ) =>
+                BitfieldUnderlying::Enum(converter.convert_enum(underlying_type)?),
+            t => unimplemented!("Bitfield is {:?}", t),
         };
 
-        Ok(Bitfield {
+        Ok(BitfieldField {
             underlying,
-            length,
-            position,
+            length: length as usize,
+            position: position as usize,
         })
     }
 }
