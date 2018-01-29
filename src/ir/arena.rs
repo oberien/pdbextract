@@ -3,14 +3,14 @@ use std::ops::Index;
 
 use pdb;
 
-use ir::{Class, Enum, Union};
+use ir::{Class, Enum, Union, Name};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct ClassIndex(usize);
+pub struct ClassIndex(pub usize);
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct EnumIndex(usize);
+pub struct EnumIndex(pub usize);
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct UnionIndex(usize);
+pub struct UnionIndex(pub usize);
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum TypeIndex {
     Class(ClassIndex),
@@ -27,6 +27,16 @@ pub struct Arena {
 }
 
 impl Arena {
+    pub fn new() -> Arena {
+        Arena {
+            classes: Vec::new(),
+            enums: Vec::new(),
+            unions: Vec::new(),
+            type_names: HashMap::new(),
+            index_map: HashMap::new(),
+        }
+    }
+
     pub fn classes(&self) -> &Vec<Class> {
         &self.classes
     }
@@ -54,7 +64,7 @@ impl Arena {
     }
     pub fn insert_custom_class(&mut self, class: Class) -> ClassIndex {
         let index = ClassIndex(self.classes.len());
-        self.type_names.insert(class.name.name.to_string(), TypeIndex::Class(index));
+        self.type_names.insert(class.name.name.clone(), TypeIndex::Class(index));
         self.classes.push(class);
         index
     }
@@ -65,7 +75,7 @@ impl Arena {
     }
     pub fn insert_custom_enum(&mut self, e: Enum) -> EnumIndex {
         let index = EnumIndex(self.classes.len());
-        self.type_names.insert(e.name.name.to_string(), TypeIndex::Enum(index));
+        self.type_names.insert(e.name.name.clone(), TypeIndex::Enum(index));
         self.enums.push(e);
         index
     }
@@ -76,7 +86,7 @@ impl Arena {
     }
     pub fn insert_custom_union(&mut self, u: Union) -> UnionIndex {
         let index = UnionIndex(self.classes.len());
-        self.type_names.insert(u.name.name.to_string(), TypeIndex::Union(index));
+        self.type_names.insert(u.name.name.clone(), TypeIndex::Union(index));
         self.unions.push(u);
         index
     }
@@ -111,5 +121,13 @@ impl<T: AsRef<str>> Index<T> for Arena {
 
     fn index(&self, index: T) -> &TypeIndex {
         &self.type_names[index.as_ref()]
+    }
+}
+
+impl<'a> Index<&'a Name> for Arena {
+    type Output = TypeIndex;
+
+    fn index(&self, index: &Name) -> &TypeIndex {
+        &self.type_names[&index.name]
     }
 }

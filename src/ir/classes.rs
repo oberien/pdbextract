@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::cmp;
+use std::io::Write;
 
 use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType,
           PointerType, BitfieldType, ArrayType, ModifierType};
@@ -7,6 +8,7 @@ use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassT
 use ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size,
          Union, Arena};
 
+#[derive(Debug)]
 pub struct Class {
     pub name: Name,
     pub kind: ClassKind,
@@ -89,7 +91,7 @@ impl Class {
                 // while the union has more fields
                 while let Some(position) = members.iter().skip(1).position(|m| m.offset() == offset) {
                     // we consume all fields of the anonymous struct of this union field
-                    let mut union_struct: Vec<_> = members.drain(..position).collect();
+                    let mut union_struct: Vec<_> = members.drain(..position+1).collect();
                     let last = &union_struct[union_struct.len()-1];
                     let size = last.offset() - offset + last.size(arena);
                     max_size = cmp::max(max_size, size);
@@ -211,6 +213,7 @@ impl Class {
     }
 }
 
+#[derive(Debug)]
 pub enum ClassMember {
     Vtable,
     BaseClass(BaseClass),
@@ -228,7 +231,7 @@ impl ClassMember {
             TypeData::Method(_) => None,
             TypeData::Nested(_) => None,
             TypeData::StaticMember(_) => None,
-            t => unimplemented!("write_field_list: {:?}", t)
+            t => unimplemented!("ClassMember: {:?}", t)
         })
     }
 
@@ -242,9 +245,9 @@ impl ClassMember {
     }
 }
 
+#[derive(Debug)]
 pub struct BaseClass {
     pub attributes: Attributes,
-    pub kind: ClassKind,
     pub offset: usize,
     pub base_class: ClassIndex,
 }
@@ -253,16 +256,17 @@ impl BaseClass {
     pub fn from(converter: &mut Converter, class: BaseClassType) -> Result<BaseClass> {
         let BaseClassType { attributes, kind, offset, base_class, .. } = class;
         let base_class = converter.convert_class(base_class)?;
+//        assert_eq!(converter.arena[base_class].kind, kind, "{:?}\n\n{:?}", converter.arena[base_class], class);
 
         Ok(BaseClass {
             attributes: attributes.into(),
-            kind,
             offset: offset as usize,
             base_class,
         })
     }
 }
 
+#[derive(Debug)]
 pub struct ClassField {
     pub attributes: Attributes,
     pub name: Name,
@@ -283,6 +287,7 @@ impl ClassField {
     }
 }
 
+#[derive(Debug)]
 pub enum ClassFieldKind {
     // TODO: Do we need PrimitiveType::indirection?
     Primitive(PrimitiveKind),
@@ -307,14 +312,18 @@ impl ClassFieldKind {
             TypeData::Union(_) => ClassFieldKind::Union(converter.convert_union(idx)?),
             TypeData::Array(array) => ClassFieldKind::Array(Box::new(Array::from(converter, array)?)),
             TypeData::Modifier(modifier) => ClassFieldKind::Modifier(Box::new(Modifier::from(converter, modifier)?)),
-            t => unimplemented!("write_member_type: {:?}", t)
+            t => unimplemented!("ClassFieldKind: {:?}", t)
         })
     }
 }
 
+#[derive(Debug)]
 pub struct Pointer {
-    attributes: PointerAttributes,
-    underlying: ClassFieldKind,
+    pub underlying: ClassFieldKind,
+    pub typ: u8,
+    pub is_const: bool,
+    pub is_reference: bool,
+    pub size: usize,
 }
 
 impl Pointer {
@@ -322,31 +331,16 @@ impl Pointer {
         let PointerType { attributes, underlying_type } = ptr;
         let underlying = ClassFieldKind::from(converter, underlying_type)?;
         Ok(Pointer {
-            attributes: attributes.into(),
             underlying,
+            typ: attributes.pointer_type(),
+            is_const: attributes.is_const(),
+            is_reference: attributes.is_reference(),
+            size: attributes.size() as usize,
         })
     }
 }
 
-pub struct PointerAttributes {
-    typ: u8,
-    is_const: bool,
-    is_reference: bool,
-    size: usize,
-}
-
-impl From<pdb::PointerAttributes> for PointerAttributes {
-    fn from(attrs: pdb::PointerAttributes) -> PointerAttributes {
-        PointerAttributes {
-            typ: attrs.pointer_type(),
-            is_const: attrs.is_const(),
-            is_reference: attrs.is_reference(),
-            size: attrs.size() as usize,
-        }
-    }
-}
-
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Attributes {
     pub is_static: bool,
     pub is_virtual: bool,
@@ -365,7 +359,13 @@ impl From<FieldAttributes> for Attributes {
     }
 }
 
-#[derive(Default)]
+impl Attributes {
+    pub fn any(&self) -> bool {
+        self.is_static || self.is_virtual || self.is_pure_virtual || self.is_intro_virtual
+    }
+}
+
+#[derive(Default, Debug)]
 pub struct Properties {
     pub packed: bool,
     pub constructors: bool,
@@ -404,6 +404,7 @@ impl From<TypeProperties> for Properties {
     }
 }
 
+#[derive(Debug)]
 pub struct Bitfield {
     pub fields: Vec<BitfieldField>,
 }
@@ -418,11 +419,13 @@ impl Bitfield {
     }
 }
 
+#[derive(Debug)]
 pub enum BitfieldUnderlying {
     Primitive(PrimitiveKind),
     Enum(EnumIndex),
 }
 
+#[derive(Debug)]
 pub struct BitfieldField {
     pub underlying: BitfieldUnderlying,
     pub length: usize,
@@ -449,6 +452,7 @@ impl BitfieldField {
     }
 }
 
+#[derive(Debug)]
 pub struct Array {
     pub element_type: ClassFieldKind,
     // TODO: indexing_type
@@ -461,6 +465,7 @@ impl Array {
         let ArrayType { element_type, dimensions, stride, .. } = array;
         let element_type = ClassFieldKind::from(converter, element_type)?;
         let mut size_so_far = element_type.size(converter.arena);
+        assert_ne!(size_so_far, 0, "{:?}\n{:?}\n{:?}", element_type, converter.arena[ClassIndex(165)], dimensions);
         let dimensions = dimensions.into_iter().map(|i| {
             let dim = i as usize / size_so_far;
             size_so_far = i as usize;
@@ -474,6 +479,7 @@ impl Array {
     }
 }
 
+#[derive(Debug)]
 pub struct Modifier {
     pub underlying: ClassFieldKind,
     pub constant: bool,

@@ -3,8 +3,9 @@ mod classes;
 mod enums;
 mod unions;
 mod name;
-mod convert;
 mod size;
+mod convert;
+mod write;
 
 use pdb;
 
@@ -17,6 +18,9 @@ pub use self::unions::*;
 pub use self::name::*;
 pub use self::size::*;
 pub use self::convert::*;
+pub use self::write::*;
+
+// TODO: what happens with recursive classes?
 
 #[derive(Debug, Fail)]
 pub enum Error {

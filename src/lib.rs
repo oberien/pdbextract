@@ -1,4 +1,5 @@
 #![feature(nll)]
+#![feature(match_default_bindings)]
 
 extern crate pdb;
 extern crate regex;
@@ -6,7 +7,7 @@ extern crate regex;
 #[macro_use] extern crate failure;
 extern crate multimap;
 
-mod ir;
+pub mod ir;
 
 use std::fs::File;
 use std::path::Path;

@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
+use std::path::Path;
+use std::fs::File;
 
-use pdb::{self, FallibleIterator, TypeInformation, TypeFinder, Error as PdbError, TypeData};
+use pdb::{self, PDB, FallibleIterator, TypeInformation, TypeFinder, Error as PdbError, TypeData};
 use multimap::MultiMap;
 
 use ir::{Arena, Result, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionIndex, Enum, Union};
@@ -9,6 +11,16 @@ pub struct Converter<'a, 't> {
     pub(in ir) finder: TypeFinder<'t>,
     types: VecDeque<pdb::TypeIndex>,
     pub(in ir) arena: &'a mut Arena,
+}
+
+pub fn read<P: AsRef<Path>>(path: P) -> Result<Arena> {
+    let mut arena = Arena::new();
+    let file = File::open(path)?;
+    let mut pdb = PDB::open(file)?;
+    let mut info = pdb.type_information()?;
+    let mut converter = Converter::new(&mut info, &mut arena)?;
+    converter.populate();
+    Ok(arena)
 }
 
 impl<'a, 't, 's: 't> Converter<'a, 't> {
@@ -21,13 +33,13 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
             match typ.parse() {
                 Ok(t) => {
                     if t.name().is_none() {
-                        println!("ignore: {:?}", t);
+//                        println!("ignore: {:?}", t);
                         continue;
                     }
                     let name = Name::from(t.name().unwrap());
                     if name.starts_with('<') {
                         // ignore anonymous types
-                        println!("ignore: {:?}", t);
+//                        println!("ignore: {:?}", t);
                         continue;
                     }
                     types.push_back(typ.type_index());

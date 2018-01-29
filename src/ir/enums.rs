@@ -2,6 +2,7 @@ use pdb::{EnumerateType, EnumerationType, TypeData};
 
 use ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter, Result};
 
+#[derive(Debug)]
 pub struct Enum {
     pub name: Name,
     pub underlying: PrimitiveKind,
@@ -41,6 +42,7 @@ impl Enum {
     }
 }
 
+#[derive(Debug)]
 pub struct Variant {
     pub name: Name,
     pub attributes: Attributes,
