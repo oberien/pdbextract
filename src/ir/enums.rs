@@ -20,16 +20,19 @@ impl Enum {
             t => unreachable!("Enum with underlying {:?}", t)
         };
         let mut variants = Vec::new();
-        match converter.finder.find(fields)?.parse()? {
-            TypeData::FieldList(list) => {
-                for field in list.fields {
-                    match field {
-                        TypeData::Enumerate(variant) => variants.push(variant.into()),
-                        t => unreachable!("not an Enumerate {:?}", t)
+        // pdb contains empty versions of some enums
+        if fields != 0 {
+            match converter.finder.find(fields)?.parse()? {
+                TypeData::FieldList(list) => {
+                    for field in list.fields {
+                        match field {
+                            TypeData::Enumerate(variant) => variants.push(variant.into()),
+                            t => unreachable!("not an Enumerate {:?}", t)
+                        }
                     }
-                }
-            },
-            t => unreachable!("not a FieldList {:?}", t)
+                },
+                t => unreachable!("not a FieldList {:?}", t)
+            }
         }
 
         Ok(Enum {

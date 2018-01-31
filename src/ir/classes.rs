@@ -3,7 +3,7 @@ use std::cmp;
 use std::io::Write;
 
 use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType,
-          PointerType, BitfieldType, ArrayType, ModifierType};
+          PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType};
 
 use ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size,
          Union, Arena};
@@ -21,7 +21,7 @@ pub struct Class {
 
 impl Class {
     pub fn from(converter: &mut Converter, class: ClassType) -> Result<Class> {
-        let ClassType { name, kind, fields, properties, derived_from, size, ..} = class;
+        let ClassType { name, kind, fields, properties, derived_from, size, ..} = class.clone();
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         let mut members = VecDeque::new();
@@ -38,6 +38,12 @@ impl Class {
             }
         }
         let name: Name = name.into();
+        if name.name == "UObjectBase" {
+            println!();
+            println!("{:?}", class);
+            println!("{:?}", members);
+            println!();
+        }
         let members = Class::transform_unions(converter.arena, &name, members);
         let members = Class::transform_bitfields(&name, members);
         Ok(Class {
@@ -118,7 +124,7 @@ impl Class {
                 // If it is in fact larger, the additional fields will be represented as regular
                 // members of the struct.
                 let union_struct = if max_size == 0 {
-                    eprintln!("I have no idea how large a union of {:?} is", name);
+                    eprintln!("I have no idea how large a union of {:?} is.", name);
                     vec![members.pop_front().unwrap()]
                 } else {
                     let position = members.iter().position(|m| m.offset() >= offset + max_size);
@@ -217,6 +223,7 @@ impl Class {
 pub enum ClassMember {
     Vtable,
     BaseClass(BaseClass),
+    VirtualBaseClass(VirtualBaseClass),
     Field(ClassField),
 }
 
@@ -225,6 +232,7 @@ impl ClassMember {
         Ok(match typ {
             TypeData::BaseClass(class) => Some(ClassMember::BaseClass(BaseClass::from(converter, class)?)),
             TypeData::Member(field) => Some(ClassMember::Field(ClassField::from(converter, field)?)),
+            TypeData::VirtualBaseClass(class) => Some(ClassMember::VirtualBaseClass(VirtualBaseClass::from(converter, class)?)),
             TypeData::VirtualFunctionTablePointer(typ) => Some(ClassMember::Vtable),
             TypeData::MemberFunction(_) => None,
             TypeData::OverloadedMethod(_) => None,
@@ -236,11 +244,12 @@ impl ClassMember {
     }
 
     pub fn offset(&self) -> usize {
-        match *self {
+        match self {
             // please be a nice compiler
             ClassMember::Vtable => 0,
-            ClassMember::BaseClass(ref base) => base.offset,
-            ClassMember::Field(ref field) => field.offset,
+            ClassMember::BaseClass(base) => base.offset,
+            ClassMember::VirtualBaseClass(base) => base.base_pointer_offset,
+            ClassMember::Field(field) => field.offset,
         }
     }
 }
@@ -262,6 +271,31 @@ impl BaseClass {
             attributes: attributes.into(),
             offset: offset as usize,
             base_class,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct VirtualBaseClass {
+    pub direct: bool,
+    pub attributes: Attributes,
+    pub base_class: ClassIndex,
+    // TODO: base_pointer
+    pub base_pointer_offset: usize,
+    pub virtual_base_offset: usize,
+}
+
+impl VirtualBaseClass {
+    pub fn from(converter: &mut Converter, class: VirtualBaseClassType) -> Result<VirtualBaseClass> {
+        let VirtualBaseClassType { direct, attributes, base_class, base_pointer,
+            base_pointer_offset, virtual_base_offset }  = class;
+        let base_class = converter.convert_class(base_class)?;
+        Ok(VirtualBaseClass {
+            direct,
+            attributes: attributes.into(),
+            base_class,
+            base_pointer_offset: base_pointer_offset as usize,
+            virtual_base_offset: virtual_base_offset as usize,
         })
     }
 }
@@ -298,6 +332,12 @@ pub enum ClassFieldKind {
     Union(UnionIndex),
     Array(Box<Array>),
     Modifier(Box<Modifier>),
+    // TODO: Arguments
+    Procedure,
+    // TODO: Arguments
+    MemberFunction,
+    // TODO: Arguments
+    Method,
 }
 
 impl ClassFieldKind {
@@ -312,6 +352,9 @@ impl ClassFieldKind {
             TypeData::Union(_) => ClassFieldKind::Union(converter.convert_union(idx)?),
             TypeData::Array(array) => ClassFieldKind::Array(Box::new(Array::from(converter, array)?)),
             TypeData::Modifier(modifier) => ClassFieldKind::Modifier(Box::new(Modifier::from(converter, modifier)?)),
+            TypeData::Procedure(_) => ClassFieldKind::Procedure,
+            TypeData::MemberFunction(_) => ClassFieldKind::MemberFunction,
+            TypeData::Method(_) => ClassFieldKind::Method,
             t => unimplemented!("ClassFieldKind: {:?}", t)
         })
     }
@@ -435,19 +478,24 @@ pub struct BitfieldField {
 impl BitfieldField {
     pub fn from(converter: &mut Converter, bitfield: BitfieldType) -> Result<BitfieldField> {
         let BitfieldType { length, position, underlying_type } = bitfield;
-        let typ = converter.finder.find(underlying_type)?.parse()?;
-
-        let underlying = match typ {
-            TypeData::Primitive(primitive) => BitfieldUnderlying::Primitive(primitive.kind),
-            TypeData::Enumeration(typ) =>
-                BitfieldUnderlying::Enum(converter.convert_enum(underlying_type)?),
-            t => unimplemented!("Bitfield is {:?}", t),
-        };
+        let underlying = BitfieldField::underlying(converter, underlying_type)?;
 
         Ok(BitfieldField {
             underlying,
             length: length as usize,
             position: position as usize,
+        })
+    }
+
+    fn underlying(converter: &mut Converter, underlying_type: pdb::TypeIndex) -> Result<BitfieldUnderlying> {
+        let typ = converter.finder.find(underlying_type)?.parse()?;
+
+        Ok(match typ {
+            TypeData::Primitive(primitive) => BitfieldUnderlying::Primitive(primitive.kind),
+            TypeData::Enumeration(typ) =>
+                BitfieldUnderlying::Enum(converter.convert_enum(underlying_type)?),
+            TypeData::Modifier(m) => BitfieldField::underlying(converter, m.underlying_type)?,
+            t => unimplemented!("Bitfield is {:?}", t),
         })
     }
 }
@@ -465,12 +513,16 @@ impl Array {
         let ArrayType { element_type, dimensions, stride, .. } = array;
         let element_type = ClassFieldKind::from(converter, element_type)?;
         let mut size_so_far = element_type.size(converter.arena);
-        assert_ne!(size_so_far, 0, "{:?}\n{:?}\n{:?}", element_type, converter.arena[ClassIndex(165)], dimensions);
-        let dimensions = dimensions.into_iter().map(|i| {
-            let dim = i as usize / size_so_far;
-            size_so_far = i as usize;
-            dim
-        }).collect();
+        let dimensions = if size_so_far == 0 {
+            // For some reason it's ok for types with an actual size to be zero-sized in the pdb.
+            dimensions.into_iter().map(|i| i as usize).collect()
+        } else {
+            dimensions.into_iter().map(|i| {
+                let dim = i as usize / size_so_far;
+                size_so_far = i as usize;
+                dim
+            }).collect()
+        };
         Ok(Array {
             element_type,
             stride,

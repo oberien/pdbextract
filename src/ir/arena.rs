@@ -3,7 +3,7 @@ use std::ops::Index;
 
 use pdb;
 
-use ir::{Class, Enum, Union, Name};
+use ir::{Class, Enum, Union, Name, Size};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct ClassIndex(pub usize);
@@ -16,6 +16,23 @@ pub enum TypeIndex {
     Class(ClassIndex),
     Enum(EnumIndex),
     Union(UnionIndex),
+}
+
+#[derive(Debug)]
+pub enum Type {
+    Class(Class),
+    Enum(Enum),
+    Union(Union),
+}
+
+impl Type {
+    pub fn name(&self) -> &Name {
+        match self {
+            Type::Class(c) => &c.name,
+            Type::Enum(e) => &e.name,
+            Type::Union(u) => &u.name,
+        }
+    }
 }
 
 pub struct Arena {
@@ -58,13 +75,16 @@ impl Arena {
     }
 
     pub fn insert_class(&mut self, class: Class, idx: pdb::TypeIndex) -> ClassIndex {
+        if idx == 6164 || idx == 174410 {
+            println!("INSERT: {:?}", class);
+        }
         let index = self.insert_custom_class(class);
         self.index_map.insert(idx, TypeIndex::Class(index));
         index
     }
     pub fn insert_custom_class(&mut self, class: Class) -> ClassIndex {
         let index = ClassIndex(self.classes.len());
-        self.type_names.insert(class.name.name.clone(), TypeIndex::Class(index));
+        self.insert_name(class.name.name.clone(), TypeIndex::Class(index), class.size);
         self.classes.push(class);
         index
     }
@@ -74,8 +94,8 @@ impl Arena {
         index
     }
     pub fn insert_custom_enum(&mut self, e: Enum) -> EnumIndex {
-        let index = EnumIndex(self.classes.len());
-        self.type_names.insert(e.name.name.clone(), TypeIndex::Enum(index));
+        let index = EnumIndex(self.enums.len());
+        self.insert_name(e.name.name.clone(), TypeIndex::Enum(index), e.size(self));
         self.enums.push(e);
         index
     }
@@ -85,10 +105,46 @@ impl Arena {
         index
     }
     pub fn insert_custom_union(&mut self, u: Union) -> UnionIndex {
-        let index = UnionIndex(self.classes.len());
-        self.type_names.insert(u.name.name.clone(), TypeIndex::Union(index));
+        let index = UnionIndex(self.unions.len());
+        self.insert_name(u.name.name.clone(), TypeIndex::Union(index), u.size);
         self.unions.push(u);
         index
+    }
+
+    // For some reason some types are inside the pdb multiple times with
+    // varying size and fields.
+    // For a string-lookup, we usually only care about the largest one.
+    fn insert_name(&mut self, name: String, index: TypeIndex, size: usize) {
+        if let Some(old) = self.type_names.get(&name) {
+            let old_size = match *old {
+                TypeIndex::Class(c) => self[c].size,
+                TypeIndex::Enum(e) => self[e].size(self),
+                TypeIndex::Union(u) => self[u].size,
+            };
+            if old_size >= size {
+                return;
+            }
+        }
+        self.type_names.insert(name, index);
+    }
+
+    pub fn get_largest_type(&self, index: TypeIndex) -> TypeIndex {
+        let (current_name, current_size) = match index {
+            TypeIndex::Class(c) => (&self[c].name, self[c].size(self)),
+            TypeIndex::Enum(e) => (&self[e].name, self[e].size(self)),
+            TypeIndex::Union(u) => (&self[u].name, self[u].size(self)),
+        };
+        let new_index = self[current_name];
+        let new_size = match new_index {
+            TypeIndex::Class(c) => self[c].size(self),
+            TypeIndex::Enum(e) => self[e].size(self),
+            TypeIndex::Union(u) => self[u].size(self),
+        };
+        if new_size > current_size {
+            new_index
+        } else {
+            index
+        }
     }
 }
 

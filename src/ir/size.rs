@@ -4,6 +4,16 @@ pub trait Size {
     fn size(&self, arena: &Arena) -> usize;
 }
 
+impl Size for Type {
+    fn size(&self, arena: &Arena) -> usize {
+        match self {
+            Type::Class(c) => c.size(arena),
+            Type::Enum(e) => e.size(arena),
+            Type::Union(u) => u.size(arena),
+        }
+    }
+}
+
 impl Size for Class {
     fn size(&self, arena: &Arena) -> usize {
         self.size
@@ -12,16 +22,23 @@ impl Size for Class {
 
 impl Size for ClassMember {
     fn size(&self, arena: &Arena) -> usize {
-        match *self {
+        match self {
             // TODO: get actual pdb pointer size
             ClassMember::Vtable => 4,
-            ClassMember::BaseClass(ref class) => class.size(arena),
-            ClassMember::Field(ref field) => field.size(arena),
+            ClassMember::BaseClass(class) => class.size(arena),
+            ClassMember::VirtualBaseClass(class) => class.size(arena),
+            ClassMember::Field(field) => field.size(arena),
         }
     }
 }
 
 impl Size for BaseClass {
+    fn size(&self, arena: &Arena) -> usize {
+        arena[self.base_class].size
+    }
+}
+
+impl Size for VirtualBaseClass {
     fn size(&self, arena: &Arena) -> usize {
         arena[self.base_class].size
     }
@@ -45,6 +62,10 @@ impl Size for ClassFieldKind {
             ClassFieldKind::Union(u) => arena[u].size(arena),
             ClassFieldKind::Array(ref a) => a.size(arena),
             ClassFieldKind::Modifier(ref m) => m.size(arena),
+            // ignore because those aren't actual fields
+            ClassFieldKind::Procedure => 0,
+            ClassFieldKind::MemberFunction => 0,
+            ClassFieldKind::Method => 0,
         }
     }
 }
@@ -56,6 +77,8 @@ impl Size for PrimitiveKind {
             PrimitiveKind::Char => 1,
             PrimitiveKind::UChar => 1,
             PrimitiveKind::RChar => 1,
+            PrimitiveKind::RChar16 => 2,
+            PrimitiveKind::RChar32 => 4,
             PrimitiveKind::WChar => 4,
             PrimitiveKind::I8 => 1,
             PrimitiveKind::U8 => 1,
@@ -77,6 +100,7 @@ impl Size for PrimitiveKind {
             PrimitiveKind::Bool16 => 2,
             PrimitiveKind::Bool32 => 4,
             PrimitiveKind::Bool64 => 8,
+            PrimitiveKind::HRESULT => 4,
             t => unimplemented!("size: primitive: {:?}", t)
         }
     }

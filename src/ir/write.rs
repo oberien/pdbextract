@@ -13,6 +13,7 @@ pub struct Writer<'a, W: Write> {
     indent: String,
     current_type_name: Option<String>,
     current_base_class_name: Option<String>,
+    is_pointer_field: bool,
 }
 
 impl<'a, W: Write> Writer<'a, W> {
@@ -26,6 +27,7 @@ impl<'a, W: Write> Writer<'a, W> {
             indent: String::new(),
             current_type_name: None,
             current_base_class_name: None,
+            is_pointer_field: false,
         }
     }
 
@@ -76,11 +78,41 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn write_type(&mut self, index: TypeIndex) -> Result<()> {
+        // For some reason some types are multiple times in the pdb with different sizes.
+        // The largest of each type can be found in arena.type_names.
+        // If the type we're trying to write is zero-sized, but the is a larger one in
+        // the type_names, we use that one instead.
+        let index = self.arena.get_largest_type(index);
+        self.written.push(index);
         match index {
             TypeIndex::Class(c) => self.write_class(&self.arena[c]),
             TypeIndex::Union(u) => self.write_union(&self.arena[u]),
             TypeIndex::Enum(e) => self.write_enum(&self.arena[e]),
         }
+    }
+
+    pub fn write_todos(&mut self) -> Result<()> {
+        while let Some(index) = self.todo.pop_front() {
+            self.written.push(index);
+            self.write_type(index)?;
+        }
+        Ok(())
+    }
+
+    pub fn write_stubs(&mut self) -> Result<()> {
+        while let Some(index) = self.stubs.pop_front() {
+            self.written.push(index);
+            match index {
+                // Those structs are stubs, you shouldn't be able to instanciate them.
+                // Thus, we use Void-like enums.
+                TypeIndex::Class(c) => {
+                    let class = &self.arena[c];
+                    writeln!(self.w, "pub enum {} {{}}", class.name.ident)?;
+                }
+                t => unimplemented!("write_stubs: {:?}", t)
+            }
+        }
+        Ok(())
     }
 
     pub fn write_class(&mut self, class: &Class) -> Result<()> {
@@ -151,6 +183,7 @@ impl<'a, W: Write> Writer<'a, W> {
         match member {
             ClassMember::Vtable => self.write_vtable()?,
             ClassMember::BaseClass(base) => self.write_base_class(base)?,
+            ClassMember::VirtualBaseClass(base) => self.write_virtual_base_class(base)?,
             ClassMember::Field(field) => self.write_class_field(field)?,
         }
         Ok(())
@@ -180,6 +213,23 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(())
     }
 
+    pub fn write_virtual_base_class(&mut self, base: &VirtualBaseClass) -> Result<()> {
+        let VirtualBaseClass { attributes, base_pointer_offset, base_class, .. } = base;
+        let Class { name, kind, members, properties, size } = &self.arena[*base_class];
+        if attributes.any() {
+            eprintln!("found nonrelevant base class: {}", name.name);
+            return Ok(());
+        }
+        let old_base_class_name = mem::replace(&mut self.current_base_class_name, Some(name.ident.clone()));
+        writeln!(self.w, "{}// START virtual base class {}", self.indent, name.name)?;
+        for member in members {
+            self.write_class_member(member)?;
+        }
+        writeln!(self.w, "{}// END virtual base class {}", self.indent, name.name)?;
+        self.current_base_class_name = old_base_class_name;
+        Ok(())
+    }
+
     pub fn write_class_field(&mut self, field: &ClassField) -> Result<()> {
         let ClassField { attributes, name, offset, kind } = field;
         if attributes.any() {
@@ -187,6 +237,7 @@ impl<'a, W: Write> Writer<'a, W> {
             return Ok(());
         }
         write!(self.w, "{}{}: ", self.indent, name.ident)?;
+        self.write_class_field_kind(kind)?;
         writeln!(self.w, ", // {:#05x}", offset)?;
         Ok(())
     }
@@ -201,6 +252,10 @@ impl<'a, W: Write> Writer<'a, W> {
             ClassFieldKind::Union(u) => self.write_field_union(*u)?,
             ClassFieldKind::Array(arr) => self.write_field_array(arr)?,
             ClassFieldKind::Modifier(m) => self.write_field_modifier(m)?,
+            // ignore as they aren't fields
+            ClassFieldKind::Procedure => {},
+            ClassFieldKind::MemberFunction => {},
+            ClassFieldKind::Method => {},
         }
         Ok(())
     }
@@ -247,7 +302,11 @@ impl<'a, W: Write> Writer<'a, W> {
     pub fn write_field_enum(&mut self, e: EnumIndex) -> Result<()> {
         let Enum { name, .. } = &self.arena[e];
         write!(self.w, "{}", name.ident)?;
-        self.add_todo(TypeIndex::Enum(e));
+        if self.is_pointer_field {
+            self.add_stub(TypeIndex::Enum(e));
+        } else {
+            self.add_todo(TypeIndex::Enum(e));
+        }
         Ok(())
     }
 
@@ -258,14 +317,20 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             write!(self.w, "*mut ")?;
         }
+        self.is_pointer_field = true;
         self.write_class_field_kind(underlying)?;
+        self.is_pointer_field = false;
         Ok(())
     }
 
     pub fn write_field_class(&mut self, class: ClassIndex) -> Result<()> {
         let Class { name, .. } = &self.arena[class];
         write!(self.w, "{}", name.ident)?;
-        self.add_todo(TypeIndex::Class(class));
+        if self.is_pointer_field {
+            self.add_stub(TypeIndex::Class(class));
+        } else {
+            self.add_todo(TypeIndex::Class(class));
+        }
         Ok(())
     }
 
@@ -280,7 +345,11 @@ impl<'a, W: Write> Writer<'a, W> {
     pub fn write_field_union(&mut self, u: UnionIndex) -> Result<()> {
         let Union { name, .. } = &self.arena[u];
         write!(self.w, "{}", name.ident)?;
-        self.add_todo(TypeIndex::Union(u));
+        if self.is_pointer_field {
+            self.add_stub(TypeIndex::Union(u));
+        } else {
+            self.add_todo(TypeIndex::Union(u));
+        }
         Ok(())
     }
 
@@ -311,5 +380,13 @@ impl<'a, W: Write> Writer<'a, W> {
         }
         writeln!(self.w, "{}{},", self.indent, name.ident)?;
         Ok(())
+    }
+}
+
+impl<'a, W: Write> Drop for Writer<'a, W> {
+    fn drop(&mut self) {
+        // TODO: if panicking
+        self.write_todos().unwrap();
+        self.write_stubs().unwrap();
     }
 }

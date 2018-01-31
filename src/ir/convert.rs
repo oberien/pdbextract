@@ -19,7 +19,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Arena> {
     let mut pdb = PDB::open(file)?;
     let mut info = pdb.type_information()?;
     let mut converter = Converter::new(&mut info, &mut arena)?;
-    converter.populate();
+    converter.populate()?;
     Ok(arena)
 }
 
@@ -42,6 +42,9 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
 //                        println!("ignore: {:?}", t);
                         continue;
                     }
+                    if name.name == "UObjectBase" {
+                        println!("{}: {:?}", typ.type_index(), t);
+                    }
                     types.push_back(typ.type_index());
                 }
                 Err(PdbError::UnimplementedTypeKind(_)) => {},
@@ -56,9 +59,16 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
     }
 
     pub fn populate(&mut self) -> Result<()> {
-        while let Some(idx) = self.types.pop_front() {
+        println!("{}", self.types.contains(&6164));
+        println!("{}", self.types.contains(&174410));
+//        while let Some(idx) = self.types.pop_front() {
+        for idx in self.types.clone().into_iter() {
+            if idx == 6164 || idx == 174410 {
+                println!("convert: {}", idx);
+            }
             self.convert(idx)?;
         }
+        println!("finished");
         Ok(())
     }
 

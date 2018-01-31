@@ -15,17 +15,23 @@ impl Union {
     pub fn from(converter: &mut Converter, u: UnionType) -> Result<Union> {
         let UnionType { name, fields, properties, size, count } = u;
         let mut members = Vec::new();
-        match converter.finder.find(fields)?.parse()? {
-            TypeData::FieldList(list) => {
-                for field in list.fields {
-                    match field {
-                        TypeData::Member(member) =>
-                            members.push(ClassField::from(converter, member)?),
-                        t => unreachable!("not a member {:?}", t)
+        // pdb contains empty versions of some unions
+        if fields != 0 {
+            match converter.finder.find(fields)?.parse()? {
+                TypeData::FieldList(list) => {
+                    for field in list.fields {
+                        match field {
+                            TypeData::Member(member) =>
+                                members.push(ClassField::from(converter, member)?),
+                            // TODO: don't ignore
+                            TypeData::Nested(nested) => {},
+                            TypeData::Method(_) => {},
+                            t => unreachable!("not a member {:?}", t)
+                        }
                     }
                 }
+                t => unreachable!("Not a FieldList {:?}", t)
             }
-            t => unreachable!("Not a FieldList {:?}", t)
         }
         Ok(Union {
             name: name.into(),
