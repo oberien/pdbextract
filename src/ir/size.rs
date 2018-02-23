@@ -4,16 +4,6 @@ pub trait Size {
     fn size(&self, arena: &Arena) -> usize;
 }
 
-impl Size for Type {
-    fn size(&self, arena: &Arena) -> usize {
-        match self {
-            Type::Class(c) => c.size(arena),
-            Type::Enum(e) => e.size(arena),
-            Type::Union(u) => u.size(arena),
-        }
-    }
-}
-
 impl Size for Class {
     fn size(&self, arena: &Arena) -> usize {
         self.size

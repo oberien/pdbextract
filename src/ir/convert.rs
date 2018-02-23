@@ -42,9 +42,6 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
 //                        println!("ignore: {:?}", t);
                         continue;
                     }
-                    if name.name == "UObjectBase" {
-                        println!("{}: {:?}", typ.type_index(), t);
-                    }
                     types.push_back(typ.type_index());
                 }
                 Err(PdbError::UnimplementedTypeKind(_)) => {},
@@ -59,16 +56,9 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
     }
 
     pub fn populate(&mut self) -> Result<()> {
-        println!("{}", self.types.contains(&6164));
-        println!("{}", self.types.contains(&174410));
-//        while let Some(idx) = self.types.pop_front() {
-        for idx in self.types.clone().into_iter() {
-            if idx == 6164 || idx == 174410 {
-                println!("convert: {}", idx);
-            }
+        while let Some(idx) = self.types.pop_front() {
             self.convert(idx)?;
         }
-        println!("finished");
         Ok(())
     }
 

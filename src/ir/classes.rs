@@ -3,7 +3,7 @@ use std::cmp;
 use std::io::Write;
 
 use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType,
-          PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType};
+          PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType, Indirection};
 
 use ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size,
          Union, Arena};
@@ -21,7 +21,7 @@ pub struct Class {
 
 impl Class {
     pub fn from(converter: &mut Converter, class: ClassType) -> Result<Class> {
-        let ClassType { name, kind, fields, properties, derived_from, size, ..} = class.clone();
+        let ClassType { name, kind, fields, properties, derived_from, size, ..} = class;
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         let mut members = VecDeque::new();
@@ -38,14 +38,8 @@ impl Class {
             }
         }
         let name: Name = name.into();
-        if name.name == "UObjectBase" {
-            println!();
-            println!("{:?}", class);
-            println!("{:?}", members);
-            println!();
-        }
-        let members = Class::transform_unions(converter.arena, &name, members);
         let members = Class::transform_bitfields(&name, members);
+        let members = Class::transform_unions(converter.arena, &name, members);
         Ok(Class {
             name,
             kind,
@@ -82,8 +76,8 @@ impl Class {
     //
     // To generate rust types, we need to detect these unions and create new types for them.
     // For simplification, for each union field, we create a new struct.
-    fn transform_unions(arena: &mut Arena, name: &Name, mut members: VecDeque<ClassMember>) -> VecDeque<ClassMember> {
-        let mut res = VecDeque::with_capacity(members.len());
+    fn transform_unions(arena: &mut Arena, name: &Name, mut members: VecDeque<ClassMember>) -> Vec<ClassMember> {
+        let mut res = Vec::with_capacity(members.len());
         let mut union_number = 0;
 
         while let Some(member) = members.pop_front() {
@@ -150,7 +144,7 @@ impl Class {
                 // and set it as field of the class we're currently analyzing.
                 union_number += 1;
                 let count = union_fields.len() as u16;
-                res.push_back(ClassMember::Field(ClassField {
+                res.push(ClassMember::Field(ClassField {
                     attributes: Attributes::default(),
                     name: format!("union{}", union_number).into(),
                     offset,
@@ -163,14 +157,14 @@ impl Class {
                     })),
                 }));
             } else {
-                res.push_back(member);
+                res.push(member);
             }
         }
         res
     }
 
-    fn transform_bitfields(name: &Name, mut members: VecDeque<ClassMember>) -> Vec<ClassMember> {
-        let mut res = Vec::with_capacity(members.len());
+    fn transform_bitfields(name: &Name, mut members: VecDeque<ClassMember>) -> VecDeque<ClassMember> {
+        let mut res = VecDeque::with_capacity(members.len());
         let mut bitfield_number = 0;
         let mut pos = usize::max_value();
         let mut offset = 0;
@@ -181,7 +175,7 @@ impl Class {
                 let field = b.fields.pop().unwrap();
                 if field.position < pos && !fields.is_empty() {
                     // new bitfield after bitfield, need to finish old one
-                    res.push(ClassMember::Field(ClassField {
+                    res.push_back(ClassMember::Field(ClassField {
                         attributes: Attributes::default(),
                         name: format!("bitfield{}", bitfield_number).into(),
                         offset,
@@ -195,12 +189,13 @@ impl Class {
                     fields = vec![field];
                 } else {
                     offset = offs;
+                    pos = field.position;
                     fields.push(field);
                 }
             } else {
                 // if we had a bitfield before, we need to finish it
                 if !fields.is_empty() {
-                    res.push(ClassMember::Field(ClassField {
+                    res.push_back(ClassMember::Field(ClassField {
                         attributes: Attributes::default(),
                         name: format!("bitfield{}", bitfield_number).into(),
                         offset,
@@ -212,7 +207,7 @@ impl Class {
                     bitfield_number += 1;
                     fields = Vec::new();
                 }
-                res.push(member);
+                res.push_back(member);
             }
         }
         res
@@ -323,7 +318,6 @@ impl ClassField {
 
 #[derive(Debug)]
 pub enum ClassFieldKind {
-    // TODO: Do we need PrimitiveType::indirection?
     Primitive(PrimitiveKind),
     Enum(EnumIndex),
     Pointer(Box<Pointer>),
@@ -344,7 +338,20 @@ impl ClassFieldKind {
     pub fn from(converter: &mut Converter, idx: pdb::TypeIndex) -> Result<ClassFieldKind> {
         let typ = converter.finder.find(idx)?.parse()?;
         Ok(match typ {
-            TypeData::Primitive(kind) => ClassFieldKind::Primitive(kind.kind),
+            TypeData::Primitive(kind) if kind.indirection == Indirection::None => ClassFieldKind::Primitive(kind.kind),
+            TypeData::Primitive(kind) => ClassFieldKind::Pointer(Box::new(Pointer {
+                underlying: ClassFieldKind::Primitive(kind.kind),
+                typ: 0,
+                is_const: false,
+                is_reference: false,
+                size: match kind.indirection {
+                    Indirection::Pointer16 => 2,
+                    Indirection::FarPointer1616 | Indirection::HugePointer1616 | Indirection::Pointer32 => 4,
+                    Indirection::Pointer1632 => 6,
+                    Indirection::Pointer64 => 8,
+                    Indirection::None => unreachable!(),
+                },
+            })),
             TypeData::Enumeration(_) => ClassFieldKind::Enum(converter.convert_enum(idx)?),
             TypeData::Pointer(ptr) => ClassFieldKind::Pointer(Box::new(Pointer::from(converter, ptr)?)),
             TypeData::Class(_) => ClassFieldKind::Class(converter.convert_class(idx)?),
