@@ -3,7 +3,6 @@ extern crate pdbextract;
 use std::env;
 use std::io;
 
-use pdbextract::PdbExtract;
 use pdbextract::ir::*;
 
 enum State {
@@ -42,19 +41,7 @@ fn main() {
             }
         }
     }
-//    let mut extract = PdbExtract::new(file);
-//    structs.into_iter().for_each(|s| { extract.add_struct(s); });
-//    ignore.into_iter().for_each(|i| { extract.ignore_struct(i); });
-//    replace.into_iter().for_each(|(p, r)| { extract.replace(&p, r); });
-//    if let Err(e) = extract.write(io::stdout()) {
-//        eprintln!("backtrace: {:?}", e.backtrace());
-//        eprintln!("error: {:?}", e);
-//        let mut e = e.cause();
-//        while let Some(cause) = e.cause() {
-//            eprintln!("caused by: {:?}", cause);
-//            e = cause;
-//        }
-//    }
+
     let arena = read(&file).unwrap();
     let mut writer = Writer::new(io::stdout(), &arena);
     for name in structs {
