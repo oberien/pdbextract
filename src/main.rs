@@ -45,16 +45,17 @@ fn main() {
     }
 
     let mut arena = read(&file).unwrap();
+    let character = get_class(&arena, "AMyCharacter");
+    character.check_offsets(&arena);
     let mut writer = Writer::new(io::stdout(), &arena);
-    for (i, c) in arena.classes().iter().enumerate() {
-        if c.name.name == "ACharacter" {
-            writer.write_type(TypeIndex::Class(ClassIndex(i))).unwrap();
-        }
-    }
+    writer.write_type(arena["AMyCharacter"]);
+    writer.write_type(arena["USceneComponent"]);
+    writer.write_type(arena["UCharacterMovementComponent"]);
+    writer.write_type(arena["AController"]);
 
     ::std::process::exit(0);
 
-    let amycharacter = get_class(&mut arena, "AActor");
+    let amycharacter = get_class_mut(&mut arena, "AActor");
     replace_with_padding(&mut amycharacter.members, Some("ControllingMatineeActors"),
                          Some("InstanceComponents"), 0, 0x150);
     let last = find_field(&amycharacter.members, "InstanceComponents");
@@ -63,10 +64,10 @@ fn main() {
     insert_after(&mut amycharacter.members, "InstanceComponents",
                  padding(1, 0xb0, 0));
 
-    let apawn = get_class(&mut arena, "APawn");
+    let apawn = get_class_mut(&mut arena, "APawn");
     insert_padding_before(&mut apawn.members, "bitfield0", 2, 8);
 
-    let uactorcomponent = get_class(&mut arena, "UActorComponent");
+    let uactorcomponent = get_class_mut(&mut arena, "UActorComponent");
     let from = get_start(&mut uactorcomponent.members, Some("UCSModifiedProperties"));
     let to = get_end(&mut uactorcomponent.members, Some("WorldPrivate"));
     delete_between(&mut uactorcomponent.members, from, to);
@@ -77,7 +78,15 @@ fn main() {
     }
 }
 
-fn get_class<'a>(arena: &'a mut Arena, name: &str) -> &'a mut Class {
+fn get_class<'a>(arena: &'a Arena, name: &str) -> &'a Class {
+    if let TypeIndex::Class(index) = arena[name] {
+        &arena[index]
+    } else {
+        unreachable!()
+    }
+}
+
+fn get_class_mut<'a>(arena: &'a mut Arena, name: &str) -> &'a mut Class {
     if let TypeIndex::Class(index) = arena[name] {
         &mut arena[index]
     } else {

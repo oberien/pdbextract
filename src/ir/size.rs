@@ -24,6 +24,7 @@ impl Size for ClassMember {
 
 impl Size for BaseClass {
     fn size(&self, arena: &Arena) -> usize {
+        eprintln!("{:?}", arena[self.base_class]);
         arena[self.base_class].size
     }
 }

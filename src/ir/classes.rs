@@ -40,13 +40,30 @@ impl Class {
         let name: Name = name.into();
         let members = Class::transform_bitfields(&name, members);
         let members = Class::transform_unions(converter.arena, &name, members);
+        let size = if size == 0 && !members.is_empty() {
+            let last = members.last().unwrap();
+            last.offset() + last.size(&converter.arena)
+        } else {
+            size as usize
+        };
         Ok(Class {
             name,
             kind,
             members,
             properties: properties.into(),
-            size: size as usize,
+            size,
         })
+    }
+
+    pub fn check_offsets(&self, arena: &Arena) {
+        let mut size = 0;
+        for member in &self.members {
+            eprintln!("{:?}", member);
+            eprintln!("{}", size);
+            eprintln!("{}", member.size(arena));
+            assert_eq!(size, member.offset(), "{:?}", member);
+            size += member.size(arena);
+        }
     }
 
     /// Converts inline-lying unions into actual unions
