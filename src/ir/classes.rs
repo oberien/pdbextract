@@ -1,12 +1,8 @@
 use std::collections::VecDeque;
 use std::cmp;
 use std::io::Write;
-
-use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType,
-          PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType, Indirection};
-
-use ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size,
-         Union, Arena};
+use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType, PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType, Indirection};
+use crate::ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size, Union, Arena};
 
 #[derive(Debug)]
 pub struct Class {

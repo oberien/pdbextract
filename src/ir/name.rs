@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::hash::{Hash, Hasher};
 use std::cmp::Ordering;
+use once_cell::sync::Lazy;
 
 use regex::Regex;
 use pdb::RawString;
@@ -51,12 +52,10 @@ impl From<String> for Name {
                 generics.push(name.to_string());
             }
         }
-        lazy_static! {
-            static ref RE: Regex = Regex::new("[^a-zA-z0-9]+").unwrap();
-        }
+        static RE: Lazy<Regex> = Lazy::new(|| Regex::new("[^a-zA-z0-9]+").unwrap());
         let ident = RE.replace_all(name.to_string().as_ref(), "_").into_owned();
         Name {
-            name: name,
+            name,
             ident,
             generics,
         }

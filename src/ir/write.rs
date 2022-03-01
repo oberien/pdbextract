@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::mem;
 use std::borrow::Cow;
 
-use ir::*;
+use crate::ir::*;
 
 pub struct Writer<'a, W: Write> {
     w: W,

@@ -1,6 +1,5 @@
 use pdb::{UnionType, TypeData};
-
-use ir::{Name, ClassField, Properties, Converter, Result};
+use crate::ir::{Name, ClassField, Properties, Converter, Result};
 
 #[derive(Debug)]
 pub struct Union {

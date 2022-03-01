@@ -1,4 +1,4 @@
-use ir::*;
+use crate::ir::*;
 
 pub trait Size {
     fn size(&self, arena: &Arena) -> usize;

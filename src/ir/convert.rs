@@ -5,12 +5,12 @@ use std::fs::File;
 use pdb::{self, PDB, FallibleIterator, TypeInformation, TypeFinder, Error as PdbError, TypeData};
 use multimap::MultiMap;
 
-use ir::{Arena, Result, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionIndex, Enum, Union};
+use crate::ir::{Arena, Result, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionIndex, Enum, Union};
 
 pub struct Converter<'a, 't> {
-    pub(in ir) finder: TypeFinder<'t>,
+    pub(in crate::ir) finder: TypeFinder<'t>,
     types: VecDeque<pdb::TypeIndex>,
-    pub(in ir) arena: &'a mut Arena,
+    pub(in crate::ir) arena: &'a mut Arena,
 }
 
 pub fn read<P: AsRef<Path>>(path: P) -> Result<Arena> {

@@ -3,7 +3,7 @@ use std::ops::{Index, IndexMut};
 
 use pdb;
 
-use ir::{Class, Enum, Union, Name, Size};
+use crate::ir::{Class, Enum, Union, Name, Size};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct ClassIndex(pub usize);

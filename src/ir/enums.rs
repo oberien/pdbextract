@@ -1,6 +1,5 @@
 use pdb::{EnumerateType, EnumerationType, TypeData};
-
-use ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter, Result};
+use crate::ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter, Result};
 
 #[derive(Debug)]
 pub struct Enum {

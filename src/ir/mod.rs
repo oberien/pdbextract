@@ -22,23 +22,15 @@ pub use self::write::*;
 
 // TODO: what happens with recursive classes?
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[fail(display = "pdb error: {}", err)]
-    Pdb {
-        err: pdb::Error,
-    },
-    #[fail(display = "not yet implemented: {}", cause)]
-    Unimplemented {
-        cause: String,
-    }
+    #[error("pdb error: {0}")]
+    Pdb(#[from] pdb::Error),
+    #[error("not yet implemented: {0}")]
+    Unimplemented(String),
+    #[error("error during writing: {0}")]
+    WriteError(#[from] std::io::Error),
 }
 
-impl From<pdb::Error> for Error {
-    fn from(err: pdb::Error) -> Self {
-        Error::Pdb { err }
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, ::failure::Error>;
+pub type Result<T> = ::std::result::Result<T, Error>;
 

@@ -1,7 +1,3 @@
-#![feature(nll)]
-#![feature(match_default_bindings)]
-extern crate pdbextract;
-
 use std::env;
 use std::io;
 
@@ -45,13 +41,17 @@ fn main() {
     }
 
     let mut arena = read(&file).unwrap();
-    let character = get_class(&arena, "AMyCharacter");
-    character.check_offsets(&arena);
+    println!("parsed");
+    //let character = get_class(&arena, "AMyCharacter");
+    //character.check_offsets(&arena);
     let mut writer = Writer::new(io::stdout(), &arena);
-    writer.write_type(arena["AMyCharacter"]);
-    writer.write_type(arena["USceneComponent"]);
-    writer.write_type(arena["UCharacterMovementComponent"]);
-    writer.write_type(arena["AController"]);
+    for s in structs {
+        writer.write_type(arena[&s]);
+    }
+    //writer.write_type(arena["AMyCharacter"]);
+    //writer.write_type(arena["USceneComponent"]);
+    //writer.write_type(arena["UCharacterMovementComponent"]);
+    //writer.write_type(arena["AController"]);
 
     ::std::process::exit(0);
 
