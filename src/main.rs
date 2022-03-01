@@ -1,51 +1,27 @@
 use std::env;
 use std::io;
-
+use clap::Parser;
 use pdbextract::ir::*;
 
-enum State {
-    Struct,
-    Ignore,
-    Replace,
+#[derive(Parser)]
+struct Args {
+    file: String,
+    #[clap(long)]
+    structs: Vec<String>,
+    #[clap(long)]
+    ignore: Vec<String>,
+    #[clap(long)]
+    replace: Vec<String>,
 }
 
 fn main() {
-    let mut args = env::args().skip(1);
-    let file = args.next().unwrap();
-    let mut structs = Vec::new();
-    let mut ignore = Vec::new();
-    let mut replace = Vec::new();
-    let mut state = State::Struct;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--struct" => {
-                state = State::Struct;
-                continue
-            }
-            "--ignore" => {
-                state = State::Ignore;
-                continue;
-            }
-            "--replace" => {
-                state = State::Replace;
-                continue;
-            }
-            _ => {
-                match state {
-                    State::Struct => structs.push(arg),
-                    State::Ignore => ignore.push(arg),
-                    State::Replace => replace.push((arg, args.next().unwrap())),
-                };
-            }
-        }
-    }
-
-    let mut arena = read(&file).unwrap();
+    let args = Args::parse();
+    let mut arena = read(&args.file).unwrap();
     println!("parsed");
     //let character = get_class(&arena, "AMyCharacter");
     //character.check_offsets(&arena);
     let mut writer = Writer::new(io::stdout(), &arena);
-    for s in structs {
+    for s in &args.structs {
         writer.write_type(arena[&s]);
     }
     //writer.write_type(arena["AMyCharacter"]);
@@ -73,7 +49,7 @@ fn main() {
     delete_between(&mut uactorcomponent.members, from, to);
 
     let mut writer = Writer::new(io::stdout(), &arena);
-    for name in structs {
+    for name in &args.structs {
         writer.write_type(arena[&name]).unwrap();
     }
 }
