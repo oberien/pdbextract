@@ -1,5 +1,6 @@
 use pdb::{UnionType, TypeData};
-use crate::ir::{Name, ClassField, Properties, Converter, Result};
+use crate::ir::{Name, ClassField, Properties, Converter};
+use crate::Result;
 
 #[derive(Debug)]
 pub struct Union {
@@ -16,14 +17,14 @@ impl Union {
         let mut members = Vec::new();
         // pdb contains empty versions of some unions
         if fields != 0 {
-            match converter.finder.find(fields)?.parse()? {
+            match converter.pdb_type(fields) {
                 TypeData::FieldList(list) => {
                     for field in list.fields {
                         match field {
                             TypeData::Member(member) =>
                                 members.push(ClassField::from(converter, member)?),
                             // TODO: don't ignore
-                            TypeData::Nested(nested) => {},
+                            TypeData::Nested(_) => {},
                             TypeData::Method(_) => {},
                             t => unreachable!("not a member {:?}", t)
                         }

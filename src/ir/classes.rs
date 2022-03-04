@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 use std::cmp;
-use std::io::Write;
 use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType, PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType, Indirection};
-use crate::ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Result, Size, Union, Arena};
+use crate::ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Size, Union, Arena};
+use crate::Result;
 
 #[derive(Debug)]
 pub struct Class {
@@ -21,8 +21,8 @@ impl Class {
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         let mut members = VecDeque::new();
-        if let Some(fields) = fields {
-            match converter.finder.find(fields)?.parse()? {
+        if let Some(field) = fields {
+            match converter.pdb_type(field) {
                 TypeData::FieldList(list) => {
                     for field in list.fields {
                         if let Ok(Some(member)) = ClassMember::from(converter, field) {
@@ -104,7 +104,7 @@ impl Class {
                 // while the union has more fields
                 while let Some(position) = members.iter().skip(1).position(|m| m.offset() == offset) {
                     // we consume all fields of the anonymous struct of this union field
-                    let mut union_struct: Vec<_> = members.drain(..position+1).collect();
+                    let union_struct: Vec<_> = members.drain(..position+1).collect();
                     let last = &union_struct[union_struct.len()-1];
                     let size = last.offset() - offset + last.size(arena);
                     max_size = cmp::max(max_size, size);
@@ -349,7 +349,7 @@ pub enum ClassFieldKind {
 
 impl ClassFieldKind {
     pub fn from(converter: &mut Converter, idx: pdb::TypeIndex) -> Result<ClassFieldKind> {
-        let typ = converter.finder.find(idx)?.parse()?;
+        let typ = converter.pdb_type(idx);
         Ok(match typ {
             TypeData::Primitive(kind) if kind.indirection == Indirection::None => ClassFieldKind::Primitive(kind.kind),
             TypeData::Primitive(kind) => ClassFieldKind::Pointer(Box::new(Pointer {
@@ -508,7 +508,7 @@ impl BitfieldField {
     }
 
     fn underlying(converter: &mut Converter, underlying_type: pdb::TypeIndex) -> Result<BitfieldUnderlying> {
-        let typ = converter.finder.find(underlying_type)?.parse()?;
+        let typ = converter.pdb_type(underlying_type);
 
         Ok(match typ {
             TypeData::Primitive(primitive) => BitfieldUnderlying::Primitive(primitive.kind),

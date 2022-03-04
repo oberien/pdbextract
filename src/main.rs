@@ -1,4 +1,3 @@
-use std::env;
 use std::io;
 use clap::Parser;
 use pdbextract::ir::*;
@@ -15,23 +14,31 @@ struct Args {
 }
 
 fn main() {
+    env_logger::init();
     let args = Args::parse();
-    let mut arena = read(&args.file).unwrap();
+    let mut arena = pdbextract::parse(&args.file).unwrap();
     println!("parsed");
     //let character = get_class(&arena, "AMyCharacter");
     //character.check_offsets(&arena);
-    let mut writer = Writer::new(io::stdout(), &arena);
-    for s in &args.structs {
-        writer.write_type(arena[&s]);
-    }
     //writer.write_type(arena["AMyCharacter"]);
     //writer.write_type(arena["USceneComponent"]);
     //writer.write_type(arena["UCharacterMovementComponent"]);
     //writer.write_type(arena["AController"]);
 
-    ::std::process::exit(0);
+    // weird_ue_fixes(&mut arena);
 
-    let amycharacter = get_class_mut(&mut arena, "AActor");
+    let mut writer = Writer::new(io::stdout(), &arena);
+    for name in &args.structs {
+        writer.write_type(arena[&name]).unwrap();
+    }
+
+    // skip drop of Writer -> TODO: why does that Drop impl exist?
+    ::std::process::exit(0);
+}
+
+#[allow(unused)]
+fn weird_ue_fixes(arena: &mut Arena) {
+    let amycharacter = get_class_mut(arena, "AActor");
     replace_with_padding(&mut amycharacter.members, Some("ControllingMatineeActors"),
                          Some("InstanceComponents"), 0, 0x150);
     let last = find_field(&amycharacter.members, "InstanceComponents");
@@ -40,18 +47,13 @@ fn main() {
     insert_after(&mut amycharacter.members, "InstanceComponents",
                  padding(1, 0xb0, 0));
 
-    let apawn = get_class_mut(&mut arena, "APawn");
+    let apawn = get_class_mut(arena, "APawn");
     insert_padding_before(&mut apawn.members, "bitfield0", 2, 8);
 
-    let uactorcomponent = get_class_mut(&mut arena, "UActorComponent");
+    let uactorcomponent = get_class_mut(arena, "UActorComponent");
     let from = get_start(&mut uactorcomponent.members, Some("UCSModifiedProperties"));
     let to = get_end(&mut uactorcomponent.members, Some("WorldPrivate"));
     delete_between(&mut uactorcomponent.members, from, to);
-
-    let mut writer = Writer::new(io::stdout(), &arena);
-    for name in &args.structs {
-        writer.write_type(arena[&name]).unwrap();
-    }
 }
 
 fn get_class<'a>(arena: &'a Arena, name: &str) -> &'a Class {

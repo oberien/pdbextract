@@ -1,5 +1,6 @@
 use pdb::{EnumerateType, EnumerationType, TypeData};
-use crate::ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter, Result};
+use crate::ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter};
+use crate::Result;
 
 #[derive(Debug)]
 pub struct Enum {
@@ -13,7 +14,7 @@ pub struct Enum {
 impl Enum {
     pub fn from(converter: &mut Converter, e: EnumerationType) -> Result<Enum> {
         let EnumerationType { name, underlying_type, fields, properties, count, .. } = e;
-        let underlying = converter.finder.find(underlying_type)?.parse()?;
+        let underlying = converter.pdb_type(underlying_type);
         let underlying = match underlying {
             TypeData::Primitive(primitive) => primitive.kind,
             t => unreachable!("Enum with underlying {:?}", t)
@@ -21,7 +22,7 @@ impl Enum {
         let mut variants = Vec::new();
         // pdb contains empty versions of some enums
         if fields != 0 {
-            match converter.finder.find(fields)?.parse()? {
+            match converter.pdb_type(fields) {
                 TypeData::FieldList(list) => {
                     for field in list.fields {
                         match field {

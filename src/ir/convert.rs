@@ -1,48 +1,37 @@
-use std::collections::VecDeque;
-use std::path::Path;
-use std::fs::File;
+use std::collections::{HashMap, VecDeque};
 
-use pdb::{self, PDB, FallibleIterator, TypeInformation, TypeFinder, Error as PdbError, TypeData};
-use multimap::MultiMap;
+use pdb::{self, FallibleIterator, TypeInformation, Error as PdbError, TypeData, TypeFinder};
 
-use crate::ir::{Arena, Result, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionIndex, Enum, Union};
+use crate::ir::{Arena, Name, Class, TypeIndex, ClassIndex, EnumIndex, UnionIndex, Enum, Union};
+use crate::Result;
 
 pub struct Converter<'a, 't> {
-    pub(in crate::ir) finder: TypeFinder<'t>,
-    types: VecDeque<pdb::TypeIndex>,
+    finder: TypeFinder<'t>,
+    pdb_type_indexes: VecDeque<pdb::TypeIndex>,
     pub(in crate::ir) arena: &'a mut Arena,
 }
 
-pub fn read<P: AsRef<Path>>(path: P) -> Result<Arena> {
-    let mut arena = Arena::new();
-    let file = File::open(path)?;
-    let mut pdb = PDB::open(file)?;
-    let mut info = pdb.type_information()?;
-    let mut converter = Converter::new(&mut info, &mut arena)?;
-    converter.populate()?;
-    Ok(arena)
-}
-
 impl<'a, 't, 's: 't> Converter<'a, 't> {
-    pub fn new(info: &'t mut TypeInformation<'s>, arena: &'a mut Arena) -> Result<Converter<'a, 't>> {
+    pub fn new(info: &'t TypeInformation<'s>, arena: &'a mut Arena) -> Result<Converter<'a, 't>> {
         let mut finder = info.new_type_finder();
         let mut iter = info.iter();
-        let mut types = VecDeque::new();
+        finder.update(&iter);
+        let mut pdb_type_indexes = VecDeque::new();
         while let Some(typ) = iter.next()? {
             finder.update(&iter);
             match typ.parse() {
                 Ok(t) => {
                     if t.name().is_none() {
-//                        println!("ignore: {:?}", t);
+                        log::info!("ignore: {t:?}");
                         continue;
                     }
                     let name = Name::from(t.name().unwrap());
                     if name.starts_with('<') {
                         // ignore anonymous types
-//                        println!("ignore: {:?}", t);
+                        log::info!("ignore: {t:?}");
                         continue;
                     }
-                    types.push_back(typ.type_index());
+                    pdb_type_indexes.push_back(typ.type_index());
                 }
                 Err(PdbError::UnimplementedTypeKind(_)) => {},
                 Err(e) => Err(e)?,
@@ -50,23 +39,27 @@ impl<'a, 't, 's: 't> Converter<'a, 't> {
         }
         Ok(Converter {
             finder,
-            types,
-            arena
+            pdb_type_indexes,
+            arena,
         })
     }
 
     pub fn populate(&mut self) -> Result<()> {
-        while let Some(idx) = self.types.pop_front() {
+        while let Some(idx) = self.pdb_type_indexes.pop_front() {
             self.convert(idx)?;
         }
         Ok(())
     }
 
-    pub fn convert(&mut self, idx: pdb::TypeIndex) -> Result<TypeIndex> {
+    pub(in crate::ir) fn pdb_type(&self, idx: pdb::TypeIndex) -> TypeData<'t> {
+        self.finder.find(idx).unwrap().parse().unwrap()
+    }
+
+    fn convert(&mut self, idx: pdb::TypeIndex) -> Result<TypeIndex> {
         if let Some(&index) = self.arena.index_map().get(&idx) {
             return Ok(index);
         }
-        let typ = self.finder.find(idx)?.parse()?;
+        let typ = self.pdb_type(idx);
         Ok(match typ {
             TypeData::Class(class) => {
                 let class = Class::from(self, class)?;

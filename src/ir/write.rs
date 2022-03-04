@@ -4,6 +4,7 @@ use std::mem;
 use std::borrow::Cow;
 
 use crate::ir::*;
+use crate::Result;
 
 pub struct Writer<'a, W: Write> {
     w: W,

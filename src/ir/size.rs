@@ -5,7 +5,7 @@ pub trait Size {
 }
 
 impl Size for Class {
-    fn size(&self, arena: &Arena) -> usize {
+    fn size(&self, _: &Arena) -> usize {
         self.size
     }
 }
@@ -62,7 +62,7 @@ impl Size for ClassFieldKind {
 }
 
 impl Size for PrimitiveKind {
-    fn size(&self, arena: &Arena) -> usize {
+    fn size(&self, _: &Arena) -> usize {
         match *self {
             PrimitiveKind::Void => 0,
             PrimitiveKind::Char => 1,
@@ -119,7 +119,7 @@ impl Size for BitfieldField {
 }
 
 impl Size for Union {
-    fn size(&self, arena: &Arena) -> usize {
+    fn size(&self, _: &Arena) -> usize {
         self.size
     }
 }
