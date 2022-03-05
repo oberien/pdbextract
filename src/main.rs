@@ -32,20 +32,40 @@ fn main() {
 
     weird_ue_fixes(&mut arena);
 
+
     let mut writer = Writer::new(io::stdout(), &arena).unwrap();
-    for name in &args.structs {
+    // for class_index in arena.class_indices() {
+    //     if arena[class_index].name.name == "FTransform" {
+    //         writer.write_exact_type(TypeIndex::Class(class_index));
+    //     }
+    // }
+    for name in &["TInlineAllocator<8,FDefaultAllocator>::ForElementType<TSharedPtr<FRootMotionSource,0> >", "TInlineAllocator<4,FDefaultAllocator>::ForElementType<TSharedPtr<FRootMotionSource,0> >"] {
+    // for name in &args.structs {
         writer.write_type(arena[&name]).unwrap();
     }
 
     if args.recursive {
         writer.write_rest().unwrap();
     }
+    eprintln!("{:#?}", get_class(&arena, "TTraceThreadData<FTraceDatum>"));
+    eprintln!("{:#?}", arena.get_class(ClassIndex(1866)));
 }
 
 #[allow(unused)]
 fn weird_ue_fixes(arena: &mut Arena) {
-    let fquat = get_class_mut(arena, "FQuat");
-    fquat.alignment = Alignment::Both(16);
+    get_class_mut(arena, "FQuat").alignment = Alignment::Both(16);
+    get_class_mut(arena, "FVector4").alignment = Alignment::Both(16);
+    get_union_mut(arena, "__m128").alignment = Alignment::Both(16);
+    for class in arena.classes_mut() {
+        if let Some(rest) = class.name.name.strip_prefix("TAlignedBytes<") {
+            if let Some(rest) = rest.strip_suffix(">::TPadding") {
+                let mut nums = rest.split(",");
+                let _size: usize = nums.next().unwrap().parse().unwrap();
+                let align: usize = nums.next().unwrap().parse().unwrap();
+                class.alignment = Alignment::Both(align);
+            }
+        }
+    }
     // let amycharacter = get_class_mut(arena, "AActor");
     // replace_with_padding(&mut amycharacter.members, Some("ControllingMatineeActors"),
     //                      Some("InstanceComponents"), 0, 0x150);
@@ -74,6 +94,13 @@ fn get_class<'a>(arena: &'a Arena, name: &str) -> &'a Class {
 
 fn get_class_mut<'a>(arena: &'a mut Arena, name: &str) -> &'a mut Class {
     if let TypeIndex::Class(index) = arena[name] {
+        &mut arena[index]
+    } else {
+        unreachable!()
+    }
+}
+fn get_union_mut<'a>(arena: &'a mut Arena, name: &str) -> &'a mut Union {
+    if let TypeIndex::Union(index) = arena[name] {
         &mut arena[index]
     } else {
         unreachable!()
