@@ -18,6 +18,7 @@ pub struct Class {
 impl Class {
     pub fn from(converter: &mut Converter, class: ClassType) -> Result<Class> {
         let ClassType { name, kind, fields, properties, derived_from, size, ..} = class;
+        log::trace!("Class::from {}", name);
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         let mut members = VecDeque::new();
@@ -237,6 +238,7 @@ pub enum ClassMember {
 
 impl ClassMember {
     pub fn from(converter: &mut Converter, typ: TypeData) -> Result<Option<ClassMember>> {
+        log::trace!("ClassMember::from {:?}", typ);
         Ok(match typ {
             TypeData::BaseClass(class) => Some(ClassMember::BaseClass(BaseClass::from(converter, class)?)),
             TypeData::Member(field) => Some(ClassMember::Field(ClassField::from(converter, field)?)),
@@ -271,6 +273,7 @@ pub struct BaseClass {
 
 impl BaseClass {
     pub fn from(converter: &mut Converter, class: BaseClassType) -> Result<BaseClass> {
+        log::trace!("BaseClass::from {:?}", class);
         let BaseClassType { attributes, kind, offset, base_class, .. } = class;
         let base_class = converter.convert_class(base_class)?;
 //        assert_eq!(converter.arena[base_class].kind, kind, "{:?}\n\n{:?}", converter.arena[base_class], class);
@@ -295,6 +298,7 @@ pub struct VirtualBaseClass {
 
 impl VirtualBaseClass {
     pub fn from(converter: &mut Converter, class: VirtualBaseClassType) -> Result<VirtualBaseClass> {
+        log::trace!("VirtualBaseClass::from {:?}", class);
         let VirtualBaseClassType { direct, attributes, base_class, base_pointer,
             base_pointer_offset, virtual_base_offset }  = class;
         let base_class = converter.convert_class(base_class)?;
@@ -319,6 +323,7 @@ pub struct ClassField {
 impl ClassField {
     pub fn from(converter: &mut Converter, field: MemberType) -> Result<ClassField> {
         let MemberType { attributes, name, offset, field_type, .. } = field;
+        log::trace!("ClassField::from {}", name);
         let kind = ClassFieldKind::from(converter, field_type)?;
         Ok(ClassField {
             attributes: attributes.into(),
