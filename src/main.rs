@@ -1,5 +1,6 @@
 use std::io;
 use clap::Parser;
+use pdbextract::Alignment;
 use pdbextract::ir::*;
 
 #[derive(Parser)]
@@ -29,7 +30,7 @@ fn main() {
     //writer.write_type(arena["UCharacterMovementComponent"]);
     //writer.write_type(arena["AController"]);
 
-    // weird_ue_fixes(&mut arena);
+    weird_ue_fixes(&mut arena);
 
     let mut writer = Writer::new(io::stdout(), &arena).unwrap();
     for name in &args.structs {
@@ -43,22 +44,24 @@ fn main() {
 
 #[allow(unused)]
 fn weird_ue_fixes(arena: &mut Arena) {
-    let amycharacter = get_class_mut(arena, "AActor");
-    replace_with_padding(&mut amycharacter.members, Some("ControllingMatineeActors"),
-                         Some("InstanceComponents"), 0, 0x150);
-    let last = find_field(&amycharacter.members, "InstanceComponents");
-    let len = amycharacter.members.len();
-    delete_between(&mut amycharacter.members, last + 1, len);
-    insert_after(&mut amycharacter.members, "InstanceComponents",
-                 padding(1, 0xb0, 0));
+    let fquat = get_class_mut(arena, "FQuat");
+    fquat.alignment = Alignment::Both(16);
+    // let amycharacter = get_class_mut(arena, "AActor");
+    // replace_with_padding(&mut amycharacter.members, Some("ControllingMatineeActors"),
+    //                      Some("InstanceComponents"), 0, 0x150);
+    // let last = find_field(&amycharacter.members, "InstanceComponents");
+    // let len = amycharacter.members.len();
+    // delete_between(&mut amycharacter.members, last + 1, len);
+    // insert_after(&mut amycharacter.members, "InstanceComponents",
+    //              padding(1, 0xb0, 0));
+    //
+    // let apawn = get_class_mut(arena, "APawn");
+    // insert_padding_before(&mut apawn.members, "bitfield0", 2, 8);
 
-    let apawn = get_class_mut(arena, "APawn");
-    insert_padding_before(&mut apawn.members, "bitfield0", 2, 8);
-
-    let uactorcomponent = get_class_mut(arena, "UActorComponent");
-    let from = get_start(&mut uactorcomponent.members, Some("UCSModifiedProperties"));
-    let to = get_end(&mut uactorcomponent.members, Some("WorldPrivate"));
-    delete_between(&mut uactorcomponent.members, from, to);
+    // let uactorcomponent = get_class_mut(arena, "UActorComponent");
+    // let from = get_start(&mut uactorcomponent.members, Some("UCSModifiedProperties"));
+    // let to = get_end(&mut uactorcomponent.members, Some("WorldPrivate"));
+    // delete_between(&mut uactorcomponent.members, from, to);
 }
 
 fn get_class<'a>(arena: &'a Arena, name: &str) -> &'a Class {

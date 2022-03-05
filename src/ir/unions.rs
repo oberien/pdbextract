@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use pdb::{UnionType, TypeData, ClassKind};
 use crate::ir::{Name, ClassField, Properties, Converter, Size, Class, ClassMember, ClassFieldKind};
-use crate::{Arena, Result};
+use crate::{Alignment, Arena, Result};
 
 #[derive(Debug)]
 pub struct Union {
@@ -10,6 +10,7 @@ pub struct Union {
     pub properties: Properties,
     pub size: usize,
     pub count: u16,
+    pub alignment: Alignment,
 }
 
 impl Union {
@@ -41,6 +42,7 @@ impl Union {
             properties: properties.into(),
             size: size as usize,
             count,
+            alignment: Alignment::None,
         })
     }
 
@@ -89,6 +91,7 @@ impl Union {
                 members: inner_members,
                 properties: Default::default(),
                 size,
+                alignment: Alignment::None,
             });
             res.push(ClassField {
                 attributes: Default::default(),

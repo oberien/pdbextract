@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::cmp;
 use pdb::{self, FieldAttributes, TypeProperties, ClassType, TypeData, BaseClassType, MemberType, PointerType, BitfieldType, ArrayType, ModifierType, VirtualBaseClassType, Indirection};
 use crate::ir::{ClassIndex, Name, ClassKind, PrimitiveKind, EnumIndex, UnionIndex, Converter, Size, Union, Arena};
-use crate::Result;
+use crate::{Alignment, Result};
 
 #[derive(Debug)]
 pub struct Class {
@@ -13,6 +13,7 @@ pub struct Class {
     //pub derived_from: Option<ClassIndex>,
     // TODO: vtable_shape
     pub size: usize,
+    pub alignment: Alignment,
 }
 
 impl Class {
@@ -49,6 +50,7 @@ impl Class {
             members,
             properties: properties.into(),
             size,
+            alignment: Alignment::None,
         })
     }
 
@@ -121,6 +123,7 @@ impl Class {
                             members: union_struct,
                             properties: Properties::default(),
                             size,
+                            alignment: Alignment::None,
                         })),
                     });
                 }
@@ -152,6 +155,7 @@ impl Class {
                         members: union_struct,
                         properties: Properties::default(),
                         size: max_size,
+                        alignment: Alignment::None,
                     })),
                 });
                 // We have created all union-field-structs. Now we create the actual union
@@ -168,6 +172,7 @@ impl Class {
                         properties: Properties::default(),
                         size: max_size,
                         count,
+                        alignment: Alignment::None,
                     })),
                 }));
             } else {

@@ -4,7 +4,7 @@ use std::mem;
 use std::borrow::Cow;
 
 use crate::ir::*;
-use crate::Result;
+use crate::{Alignment, Result};
 
 pub struct Writer<'a, W: Write> {
     w: W,
@@ -138,8 +138,18 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(())
     }
 
+    fn write_alignment(&mut self, alignment: Alignment) -> Result<()> {
+        match alignment {
+            Alignment::None => (),
+            Alignment::Both(align) => writeln!(self.w, "{}#[repr(align({align}))]", self.indent)?,
+            Alignment::Windows(align) => writeln!(self.w, "{}#[repr(cfg_attr(windows, align = {align}))]", self.indent)?,
+            Alignment::Linux(align) => writeln!(self.w, r#"{}#[repr(cfg_attr(target_os = "linux", align = {align}))]"#, self.indent)?,
+        }
+        Ok(())
+    }
+
     fn write_class(&mut self, class: &Class) -> Result<()> {
-        let Class { name, kind, members, properties, size } = class;
+        let Class { name, kind, members, properties, size, alignment } = class;
         self.current_type_name = Some(name.ident.clone());
         assert_ne!(*kind, ClassKind::Interface);
         writeln!(self.w, "{}// {}", self.indent, name.name)?;
@@ -148,6 +158,7 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             writeln!(self.w, "{}#[repr(C)]", self.indent)?;
         }
+        self.write_alignment(*alignment)?;
         writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub struct {} {{", self.indent, name.ident)?;
         self.indent();
@@ -168,7 +179,7 @@ impl<'a, W: Write> Writer<'a, W> {
         for (name, offset) in fields {
             match offset {
                 Some(offset) => writeln!(self.w, "{}assert_eq!(memoffset::offset_of!({struct_name}, {name}), {offset});", self.indent)?,
-                None => writeln!(self.w, "// {}", name)?,
+                None => writeln!(self.w, "{}// skipped field {}", self.indent, name)?,
             }
         }
         writeln!(self.w, "{}assert_eq!(std::mem::size_of::<{struct_name}>(), {size});", self.indent)?;
@@ -179,13 +190,14 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn write_union(&mut self, u: &Union) -> Result<()> {
-        let Union { name, fields, properties, size, .. } = u;
+        let Union { name, fields, properties, size, count: _, alignment } = u;
         writeln!(self.w, "{}// {}", self.indent, name.name)?;
         if properties.packed {
             writeln!(self.w, "{}#[repr(C, packed)]", self.indent)?;
         } else {
             writeln!(self.w, "{}#[repr(C)]", self.indent)?;
         }
+        self.write_alignment(*alignment)?;
         writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub union {} {{", self.indent, name.ident)?;
         self.current_type_name = Some(name.ident.clone());
@@ -203,7 +215,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
     fn write_enum(&mut self, e: &Enum) -> Result<()> {
         let size = e.size(self.arena);
-        let Enum { name, underlying, variants, properties, .. } = e;
+        let Enum { name, underlying, variants, properties, count: _, alignment } = e;
         writeln!(self.w, "{}// {}", self.indent, name.name)?;
         write!(self.w, "{}#[repr(", self.indent)?;
         self.write_field_primitive(underlying)?;
@@ -212,6 +224,7 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             writeln!(self.w, ")]")?;
         }
+        self.write_alignment(*alignment)?;
         writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub enum {} {{", self.indent, name.ident)?;
         self.current_type_name = Some(name.ident.clone());
@@ -247,7 +260,8 @@ impl<'a, W: Write> Writer<'a, W> {
     fn write_base_class(&mut self, base: &BaseClass) -> Result<Vec<(String, Option<usize>)>> {
         let BaseClass { attributes, offset, base_class } = base;
         let base_class = self.arena.get_largest_class_index(*base_class);
-        let Class { name, kind, members, properties, size } = &self.arena[base_class];
+        let Class { name, kind, members, properties, size, alignment } = &self.arena[base_class];
+        assert_eq!(*alignment, Alignment::None, "unimplemented: BaseClass Alignment");
         if attributes.any() {
             eprintln!("found nonrelevant base class: {}", name.name);
             return Ok(vec![]);
@@ -266,7 +280,8 @@ impl<'a, W: Write> Writer<'a, W> {
     fn write_virtual_base_class(&mut self, base: &VirtualBaseClass) -> Result<Vec<(String, Option<usize>)>> {
         let VirtualBaseClass { attributes, base_pointer_offset, base_class, .. } = base;
         let base_class = self.arena.get_largest_class_index(*base_class);
-        let Class { name, kind, members, properties, size } = &self.arena[base_class];
+        let Class { name, kind, members, properties, size, alignment } = &self.arena[base_class];
+        assert_eq!(*alignment, Alignment::None, "unimplemented: VirtualBaseClass Alignment");
         if attributes.any() {
             eprintln!("found nonrelevant base class: {}", name.name);
             return Ok(vec![]);

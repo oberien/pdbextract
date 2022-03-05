@@ -17,6 +17,14 @@ pub enum Error {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alignment {
+    None,
+    Both(usize),
+    Windows(usize),
+    Linux(usize),
+}
+
 // TODO: what happens with recursive classes?
 
 pub fn parse<P: AsRef<Path>>(path: P) -> Result<Arena> {

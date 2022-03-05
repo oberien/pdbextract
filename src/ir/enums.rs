@@ -1,6 +1,6 @@
 use pdb::{EnumerateType, EnumerationType, TypeData};
 use crate::ir::{Name, PrimitiveKind, EnumValue, Properties, Attributes, Converter};
-use crate::Result;
+use crate::{Alignment, Result};
 
 #[derive(Debug)]
 pub struct Enum {
@@ -9,6 +9,7 @@ pub struct Enum {
     pub variants: Vec<Variant>,
     pub properties: Properties,
     pub count: usize,
+    pub alignment: Alignment,
 }
 
 impl Enum {
@@ -41,6 +42,7 @@ impl Enum {
             variants,
             properties: properties.into(),
             count: count as usize,
+            alignment: Alignment::None,
         })
     }
 }
