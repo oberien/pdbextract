@@ -44,12 +44,12 @@ impl Size for ClassFieldKind {
     fn size(&self, arena: &Arena) -> usize {
         match *self {
             ClassFieldKind::Primitive(primitive) => primitive.size(arena),
-            ClassFieldKind::Enum(e) => arena[e].size(arena),
+            ClassFieldKind::Enum(e) => arena.get_largest_enum(e).size(arena),
             // TODO: get actual pdb pointer size
             ClassFieldKind::Pointer(_) => 4,
-            ClassFieldKind::Class(c) => arena[c].size(arena),
+            ClassFieldKind::Class(c) => arena.get_largest_class(c).size(arena),
             ClassFieldKind::Bitfield(ref b) => b.size(arena),
-            ClassFieldKind::Union(u) => arena[u].size(arena),
+            ClassFieldKind::Union(u) => arena.get_largest_union(u).size(arena),
             ClassFieldKind::Array(ref a) => a.size(arena),
             ClassFieldKind::Modifier(ref m) => m.size(arena),
             // ignore because those aren't actual fields

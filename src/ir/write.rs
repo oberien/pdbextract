@@ -433,9 +433,12 @@ impl<'a, W: Write> Writer<'a, W> {
         for _ in dimensions {
             write!(self.w, "[")?;
         }
+        let mut size = element_type.size(self.arena);
         self.write_class_field_kind(element_type)?;
-        for d in dimensions {
-            write!(self.w, "; {}]", d)?;
+        for &d in dimensions {
+            let num_elements = d / size.max(1);
+            write!(self.w, "; {}]", num_elements)?;
+            size = d;
         }
         Ok(())
     }
