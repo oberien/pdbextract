@@ -107,6 +107,15 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
+    pub fn write_exact_type(&mut self, index: TypeIndex) -> Result<()> {
+        self.add_written(index);
+        match index {
+            TypeIndex::Class(c) => self.write_class(&self.arena[c]),
+            TypeIndex::Union(u) => self.write_union(&self.arena[u]),
+            TypeIndex::Enum(e) => self.write_enum(&self.arena[e]),
+        }
+    }
+
     pub fn write_todos(&mut self) -> Result<()> {
         while let Some(index) = self.todo.pop_front() {
             self.add_written(index);
@@ -174,15 +183,16 @@ impl<'a, W: Write> Writer<'a, W> {
 
         // write layout test
         let struct_name = &name.ident;
+        writeln!(self.w, "{}#[test]", self.indent)?;
         writeln!(self.w, "{}pub fn test_{}_layout() {{", self.indent, struct_name)?;
         self.indent();
         for (name, offset) in fields {
             match offset {
-                Some(offset) => writeln!(self.w, "{}assert_eq!(memoffset::offset_of!({struct_name}, {name}), {offset});", self.indent)?,
+                Some(offset) => writeln!(self.w, "{}assert_eq!({offset:#05x}, memoffset::offset_of!({struct_name}, {name}));", self.indent)?,
                 None => writeln!(self.w, "{}// skipped field {}", self.indent, name)?,
             }
         }
-        writeln!(self.w, "{}assert_eq!(std::mem::size_of::<{struct_name}>(), {size});", self.indent)?;
+        writeln!(self.w, "{}assert_eq!({size:#05x}, std::mem::size_of::<{struct_name}>());", self.indent)?;
         self.dedent();
         writeln!(self.w, "{}}}", self.indent)?;
 
@@ -298,17 +308,17 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn write_class_field(&mut self, field: &ClassField) -> Result<Vec<(String, Option<usize>)>> {
-        let ClassField { attributes, name, offset, kind } = field;
+        let ClassField { attributes, name, offset, kind, max_size } = field;
         if attributes.any() {
             eprintln!("found nonrelevant field: {}", name.name);
             return Ok(vec![]);
         }
-        let name = if let ClassFieldKind::Union(_) = kind {
-            let name = format!("union{}", self.union_number);
-            write!(self.w, "{}{}: ", self.indent, name)?;
-            self.union_number += 1;
-            name
-        } else {
+        // let name = if let ClassFieldKind::Union(_) = kind {
+        //     let name = format!("union{}", self.union_number);
+        //     write!(self.w, "{}{}: ", self.indent, name)?;
+        //     self.union_number += 1;
+        //     name
+        // } else {
             // fix multiple fields with the same name
             let ident: Cow<_> = if self.current_fields.contains(&name.ident) {
                 let mut i = 0;
@@ -325,14 +335,14 @@ impl<'a, W: Write> Writer<'a, W> {
             };
             write!(self.w, "{}pub {}: ", self.indent, ident)?;
             self.current_fields.push(ident.clone().into_owned());
-            ident.into_owned()
-        };
-        self.write_class_field_kind(kind)?;
+            let name = ident.into_owned();
+        // };
+        self.write_class_field_kind(kind, *max_size)?;
         writeln!(self.w, ", // offset {:#05x}", offset)?;
         Ok(vec![(name, Some(*offset))])
     }
 
-    fn write_class_field_kind(&mut self, kind: &ClassFieldKind) -> Result<()> {
+    fn write_class_field_kind(&mut self, kind: &ClassFieldKind, max_size: usize) -> Result<()> {
         match kind {
             ClassFieldKind::Primitive(prim) => self.write_field_primitive(prim)?,
             ClassFieldKind::Enum(e) => self.write_field_enum(*e)?,
@@ -340,7 +350,7 @@ impl<'a, W: Write> Writer<'a, W> {
             ClassFieldKind::Class(class) => self.write_field_class(*class)?,
             ClassFieldKind::Bitfield(b) => self.write_field_bitfield(b)?,
             ClassFieldKind::Union(u) => self.write_field_union(*u)?,
-            ClassFieldKind::Array(arr) => self.write_field_array(arr)?,
+            ClassFieldKind::Array(arr) => self.write_field_array(arr, max_size)?,
             ClassFieldKind::Modifier(m) => self.write_field_modifier(m)?,
             // ignore as they aren't fields
             ClassFieldKind::Procedure => self.write_field_function()?,
@@ -408,7 +418,7 @@ impl<'a, W: Write> Writer<'a, W> {
             write!(self.w, "*mut ")?;
         }
         self.is_pointer_field = true;
-        self.write_class_field_kind(underlying)?;
+        self.write_class_field_kind(underlying, usize::MAX)?;
         self.is_pointer_field = false;
         Ok(())
     }
@@ -443,14 +453,30 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(())
     }
 
-    fn write_field_array(&mut self, arr: &Array) -> Result<()> {
-        let Array { element_type, dimensions, .. } = arr;
+    fn write_field_array(&mut self, arr: &Array, max_size: usize) -> Result<()> {
+        let Array { element_type, dimensions, stride } = arr;
         for _ in dimensions {
             write!(self.w, "[")?;
         }
         let mut size = element_type.size(self.arena);
-        self.write_class_field_kind(element_type)?;
-        for &d in dimensions {
+        self.write_class_field_kind(element_type, usize::MAX)?;
+        dbg!(element_type, stride, dimensions);
+        let len = dimensions.len();
+        for (i, &d) in dimensions.iter().enumerate() {
+            let d = if i == len-1 && max_size < usize::MAX && max_size > d {
+                // last element
+                // The pdb sometimes reports wrong dimensions (number of elements instead of number
+                // of bytes). Thus, for the last element we use max_size instead of the dimension.
+                if max_size != d {
+                    eprintln!("PDB reported invalid array dimension: {} instead of max {}", d, max_size);
+                }
+                max_size
+            } else {
+                if max_size == usize::MAX {
+                    eprintln!("Unknown Array max_size");
+                }
+                d
+            };
             let num_elements = d / size.max(1);
             write!(self.w, "; {}]", num_elements)?;
             size = d;
@@ -463,7 +489,7 @@ impl<'a, W: Write> Writer<'a, W> {
 //        if *constant {
 //            write!(self.w, "const ")?;
 //        }
-        self.write_class_field_kind(underlying)
+        self.write_class_field_kind(underlying, usize::MAX)
     }
 
     fn write_field_function(&mut self) -> Result<()> {

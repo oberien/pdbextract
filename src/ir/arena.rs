@@ -41,6 +41,17 @@ impl Arena {
         &self.classes
     }
 
+    pub fn class_indices(&self) -> impl Iterator<Item = ClassIndex> + '_ {
+        self.index_map.values().filter_map(|idx| match idx {
+            TypeIndex::Class(class_index) => Some(class_index),
+            _ => None,
+        }).copied()
+    }
+
+    pub fn classes_mut(&mut self) -> &mut Vec<Class> {
+        &mut self.classes
+    }
+
     pub fn enums(&self) -> &Vec<Enum> {
         &self.enums
     }
@@ -108,32 +119,35 @@ impl Arena {
         self.type_names.insert(name, index);
     }
 
-    pub fn get_class(&self, index: ClassIndex) -> &Class {
-        &self.classes[index.0]
+    pub fn get_class(&self, index: ClassIndex) -> Option<&Class> {
+        self.classes.get(index.0)
     }
-    pub fn get_class_mut(&mut self, index: ClassIndex) -> &mut Class {
-        &mut self.classes[index.0]
+    pub fn get_class_mut(&mut self, index: ClassIndex) -> Option<&mut Class> {
+        self.classes.get_mut(index.0)
     }
-    pub fn get_enum(&self, index: EnumIndex) -> &Enum {
-        &self.enums[index.0]
+    pub fn get_enum(&self, index: EnumIndex) -> Option<&Enum> {
+        self.enums.get(index.0)
     }
-    pub fn get_enum_mut(&mut self, index: EnumIndex) -> &mut Enum {
-        &mut self.enums[index.0]
+    pub fn get_enum_mut(&mut self, index: EnumIndex) -> Option<&mut Enum> {
+        self.enums.get_mut(index.0)
     }
-    pub fn get_union(&self, index: UnionIndex) -> &Union {
-        &self.unions[index.0]
+    pub fn get_union(&self, index: UnionIndex) -> Option<&Union> {
+        self.unions.get(index.0)
     }
-    pub fn get_union_mut(&mut self, index: UnionIndex) -> &mut Union {
-        &mut self.unions[index.0]
+    pub fn get_union_mut(&mut self, index: UnionIndex) -> Option<&mut Union> {
+        self.unions.get_mut(index.0)
+    }
+    pub fn get_type_by_name(&self, index: &str) -> Option<&TypeIndex> {
+        self.type_names.get(index)
     }
 
     pub fn get_largest_class_index(&self, index: ClassIndex) -> ClassIndex {
-        let class = self.get_class(index);
+        let class = &self[index];
         let new_index = match self[&class.name] {
             TypeIndex::Class(c) => c,
             _ => unreachable!()
         };
-        let new_class = self.get_class(new_index);
+        let new_class = &self[new_index];
         if class.size(self) >= new_class.size(self) && class.members.len() >= new_class.members.len() {
             index
         } else {
@@ -141,15 +155,15 @@ impl Arena {
         }
     }
     pub fn get_largest_class(&self, index: ClassIndex) -> &Class {
-        self.get_class(self.get_largest_class_index(index))
+        self.get_class(self.get_largest_class_index(index)).unwrap()
     }
     pub fn get_largest_enum_index(&self, index: EnumIndex) -> EnumIndex {
-        let e = self.get_enum(index);
+        let e = &self[index];
         let new_index = match self[&e.name] {
             TypeIndex::Enum(e) => e,
             _ => unreachable!()
         };
-        let new_e = self.get_enum(new_index);
+        let new_e = &self[new_index];
         if e.size(self) >= new_e.size(self) && e.variants.len() >= new_e.variants.len() {
             index
         } else {
@@ -157,15 +171,15 @@ impl Arena {
         }
     }
     pub fn get_largest_enum(&self, index: EnumIndex) -> &Enum {
-        self.get_enum(self.get_largest_enum_index(index))
+        self.get_enum(self.get_largest_enum_index(index)).unwrap()
     }
     pub fn get_largest_union_index(&self, index: UnionIndex) -> UnionIndex {
-        let u = self.get_union(index);
+        let u = &self[index];
         let new_index = match self[&u.name] {
             TypeIndex::Union(u) => u,
             _ => unreachable!()
         };
-        let new_u = self.get_union(new_index);
+        let new_u = &self[new_index];
         if u.size(self) >= new_u.size(self) && u.fields.len() >= new_u.fields.len() {
             index
         } else {
@@ -173,7 +187,7 @@ impl Arena {
         }
     }
     pub fn get_largest_union(&self, index: UnionIndex) -> &Union {
-        self.get_union(self.get_largest_union_index(index))
+        self.get_union(self.get_largest_union_index(index)).unwrap()
     }
     pub fn get_largest_type_index(&self, index: TypeIndex) -> TypeIndex {
         match index {
@@ -188,12 +202,12 @@ impl Index<ClassIndex> for Arena {
     type Output = Class;
 
     fn index(&self, index: ClassIndex) -> &Class {
-        self.get_class(index)
+        self.get_class(index).unwrap()
     }
 }
 impl IndexMut<ClassIndex> for Arena {
     fn index_mut(&mut self, index: ClassIndex) -> &mut Class {
-        self.get_class_mut(index)
+        self.get_class_mut(index).unwrap()
     }
 }
 
@@ -201,12 +215,12 @@ impl Index<EnumIndex> for Arena {
     type Output = Enum;
 
     fn index(&self, index: EnumIndex) -> &Enum {
-        self.get_enum(index)
+        self.get_enum(index).unwrap()
     }
 }
 impl IndexMut<EnumIndex> for Arena {
     fn index_mut(&mut self, index: EnumIndex) -> &mut Enum {
-        self.get_enum_mut(index)
+        self.get_enum_mut(index).unwrap()
     }
 }
 
@@ -214,12 +228,12 @@ impl Index<UnionIndex> for Arena {
     type Output = Union;
 
     fn index(&self, index: UnionIndex) -> &Union {
-        self.get_union(index)
+        self.get_union(index).unwrap()
     }
 }
 impl IndexMut<UnionIndex> for Arena {
     fn index_mut(&mut self, index: UnionIndex) -> &mut Union {
-        self.get_union_mut(index)
+        self.get_union_mut(index).unwrap()
     }
 }
 
@@ -227,7 +241,7 @@ impl<T: AsRef<str>> Index<T> for Arena {
     type Output = TypeIndex;
 
     fn index(&self, index: T) -> &TypeIndex {
-        &self.type_names[index.as_ref()]
+        self.get_type_by_name(index.as_ref()).unwrap()
     }
 }
 
@@ -235,6 +249,6 @@ impl<'a> Index<&'a Name> for Arena {
     type Output = TypeIndex;
 
     fn index(&self, index: &Name) -> &TypeIndex {
-        &self.type_names[&index.name]
+        self.get_type_by_name(&index.name).unwrap()
     }
 }

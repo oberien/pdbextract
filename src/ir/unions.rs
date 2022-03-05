@@ -21,10 +21,18 @@ impl Union {
         if fields != 0 {
             match converter.pdb_type(fields) {
                 TypeData::FieldList(list) => {
-                    for field in list.fields {
+                    let mut peekable = list.fields.into_iter().peekable();
+                    let mut last_offset = 0;
+                    while let Some(field) = peekable.next() {
+                        let max_size = peekable.peek().map(|t| match t {
+                            TypeData::Member(field) => field.offset as usize - last_offset,
+                            _ => usize::MAX,
+                        }).unwrap_or(usize::MAX);
                         match field {
-                            TypeData::Member(member) =>
-                                members.push_back(ClassField::from(converter, member)?),
+                            TypeData::Member(member) => {
+                                last_offset = member.offset as usize;
+                                members.push_back(ClassField::from(converter, member, max_size)?);
+                            }
                             TypeData::Nested(_) => {},
                             TypeData::Method(_) => {},
                             t => unreachable!("not a member {:?}", t)
@@ -98,6 +106,7 @@ impl Union {
                 name: format!("struct{}", struct_number).into(),
                 offset: 0,
                 kind: ClassFieldKind::Class(inner_struct_index),
+                max_size: size,
             });
             struct_number += 1;
         }

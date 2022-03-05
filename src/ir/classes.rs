@@ -18,16 +18,23 @@ pub struct Class {
 
 impl Class {
     pub fn from(converter: &mut Converter, class: ClassType) -> Result<Class> {
+        log::trace!("Class::from {:?}", class);
         let ClassType { name, kind, fields, properties, derived_from, size, ..} = class;
-        log::trace!("Class::from {}", name);
         assert_eq!(derived_from, None);
         assert_ne!(kind, ClassKind::Interface);
         let mut members = VecDeque::new();
         if let Some(field) = fields {
             match converter.pdb_type(field) {
                 TypeData::FieldList(list) => {
-                    for field in list.fields {
-                        if let Ok(Some(member)) = ClassMember::from(converter, field) {
+                    let mut peekable = list.fields.into_iter().peekable();
+                    let mut last_offset = 0;
+                    while let Some(field) = peekable.next() {
+                        let max_size = peekable.peek().map(|t| match t {
+                            TypeData::Member(field) => field.offset as usize - last_offset,
+                            _ => usize::MAX,
+                        }).unwrap_or(usize::MAX);
+                        if let Ok(Some(member)) = ClassMember::from(converter, field, max_size) {
+                            last_offset = member.offset();
                             members.push_back(member);
                         }
                     }
@@ -125,6 +132,7 @@ impl Class {
                             size,
                             alignment: Alignment::None,
                         })),
+                        max_size: size,
                     });
                 }
 
@@ -157,6 +165,7 @@ impl Class {
                         size: max_size,
                         alignment: Alignment::None,
                     })),
+                    max_size,
                 });
                 // We have created all union-field-structs. Now we create the actual union
                 // and set it as field of the class we're currently analyzing.
@@ -174,6 +183,7 @@ impl Class {
                         count,
                         alignment: Alignment::None,
                     })),
+                    max_size,
                 }));
             } else {
                 res.push(member);
@@ -194,13 +204,15 @@ impl Class {
                 let field = b.fields.pop().unwrap();
                 if field.position < pos && !fields.is_empty() {
                     // new bitfield after bitfield, need to finish old one
+                    let max_size = fields.iter().map(|f: &BitfieldField| f.length).sum();
                     res.push_back(ClassMember::Field(ClassField {
                         attributes: Attributes::default(),
                         name: format!("bitfield{}", bitfield_number).into(),
                         offset,
                         kind: ClassFieldKind::Bitfield(Bitfield {
                             fields,
-                        })
+                        }),
+                        max_size,
                     }));
                     bitfield_number += 1;
                     offset = offs;
@@ -214,13 +226,15 @@ impl Class {
             } else {
                 // if we had a bitfield before, we need to finish it
                 if !fields.is_empty() {
+                    let max_size = fields.iter().map(|f| f.length).sum();
                     res.push_back(ClassMember::Field(ClassField {
                         attributes: Attributes::default(),
                         name: format!("bitfield{}", bitfield_number).into(),
                         offset,
                         kind: ClassFieldKind::Bitfield(Bitfield {
                             fields,
-                        })
+                        }),
+                        max_size,
                     }));
                     pos = usize::max_value();
                     bitfield_number += 1;
@@ -242,11 +256,11 @@ pub enum ClassMember {
 }
 
 impl ClassMember {
-    pub fn from(converter: &mut Converter, typ: TypeData) -> Result<Option<ClassMember>> {
+    pub fn from(converter: &mut Converter, typ: TypeData, max_size: usize) -> Result<Option<ClassMember>> {
         log::trace!("ClassMember::from {:?}", typ);
         Ok(match typ {
             TypeData::BaseClass(class) => Some(ClassMember::BaseClass(BaseClass::from(converter, class)?)),
-            TypeData::Member(field) => Some(ClassMember::Field(ClassField::from(converter, field)?)),
+            TypeData::Member(field) => Some(ClassMember::Field(ClassField::from(converter, field, max_size)?)),
             TypeData::VirtualBaseClass(class) => Some(ClassMember::VirtualBaseClass(VirtualBaseClass::from(converter, class)?)),
             TypeData::VirtualFunctionTablePointer(typ) => Some(ClassMember::Vtable),
             TypeData::MemberFunction(_) => None,
@@ -323,10 +337,13 @@ pub struct ClassField {
     pub name: Name,
     pub offset: usize,
     pub kind: ClassFieldKind,
+    /// The maximum size this field can have (difference between its offset and the offset
+    /// of the following field or the size of the class if this field is the last field).
+    pub max_size: usize,
 }
 
 impl ClassField {
-    pub fn from(converter: &mut Converter, field: MemberType) -> Result<ClassField> {
+    pub fn from(converter: &mut Converter, field: MemberType, max_size: usize) -> Result<ClassField> {
         let MemberType { attributes, name, offset, field_type, .. } = field;
         log::trace!("ClassField::from {}", name);
         let kind = ClassFieldKind::from(converter, field_type)?;
@@ -335,6 +352,7 @@ impl ClassField {
             name: name.into(),
             offset: offset as usize,
             kind,
+            max_size,
         })
     }
 }

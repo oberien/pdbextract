@@ -160,6 +160,7 @@ fn padding(pad_num: usize, size: usize, offset: usize) -> ClassMember {
             element_type: ClassFieldKind::Primitive(PrimitiveKind::U8),
             stride: None,
             dimensions: vec![size],
-        }))
+        })),
+        max_size: size,
     })
 }
