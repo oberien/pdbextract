@@ -93,7 +93,10 @@ impl<'a, W: Write> Writer<'a, W> {
             TypeIndex::Enum(e) => &self.arena[e].name,
         };
         for generic in &name.generics {
-            add_fn(self, self.arena[generic]);
+            match self.arena.get_type_by_name(generic) {
+                Some(type_index) => add_fn(self, *type_index),
+                None => eprintln!("Can't find generic type with name {:?}", generic),
+            }
         }
     }
 

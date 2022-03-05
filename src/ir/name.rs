@@ -23,25 +23,28 @@ impl From<String> for Name {
     fn from(name: String) -> Name {
         let mut generics = Vec::new();
         if let Some((_, inner)) = get_between(&name, '<', '>') {
-            for mut name in split_list(inner) {
-                name = name.trim();
-                if name.starts_with("enum ") {
-                    name = &name[5..];
-                }
+            for name in split_list(inner) {
+                let mut name = name.to_string();
+                name = name.trim().to_string();
+                // if name.starts_with("enum ") {
+                //     name = &name[5..];
+                // }
                 if name.ends_with(" *") || name.ends_with(" &") {
-                    let len = name.len();
-                    name = &name[.. len - 2];
+                    name = name.replace('*', "star");
+                    name = name.replace('&', "amp");
+                    // let len = name.len();
+                    // name = &name[.. len - 2];
                 }
-                if name.ends_with(" const") {
-                    let len = name.len();
-                    name = &name[.. len-6];
-                }
+                // if name.ends_with(" const") {
+                //     let len = name.len();
+                //     name = &name[.. len-6];
+                // }
                 if name.parse::<u64>().is_ok() {
                     // number
                     continue;
                 }
                 // blacklist of primitive types
-                match name {
+                match name.as_str() {
                     "void" | "bool" | "char" | "short" | "int" | "long" | "wchar_t"
                     | "float" | "double" | "unnamed-tag" => continue,
                     name if name.starts_with("unsigned") => continue,
@@ -49,11 +52,14 @@ impl From<String> for Name {
                     name if name.contains("(") && name.contains(")") => continue,
                     _ => {}
                 }
-                generics.push(name.to_string());
+                generics.push(name);
             }
         }
         static RE: Lazy<Regex> = Lazy::new(|| Regex::new("[^a-zA-z0-9]+").unwrap());
-        let ident = RE.replace_all(name.to_string().as_ref(), "_").into_owned();
+        let ident = name.to_string()
+            .replace("*", "star")
+            .replace("&", "amp");
+        let ident = RE.replace_all(ident.to_string().as_ref(), "_").into_owned();
         Name {
             name,
             ident,
