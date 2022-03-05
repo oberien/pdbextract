@@ -21,8 +21,9 @@ pub struct Writer<'a, W: Write> {
 }
 
 impl<'a, W: Write> Writer<'a, W> {
-    pub fn new(w: W, arena: &'a Arena) -> Writer<'a, W> {
-        Writer {
+    pub fn new(mut w: W, arena: &'a Arena) -> Result<Writer<'a, W>> {
+        writeln!(w, "#![allow(non_camel_case_types, non_snake_case)]")?;
+        Ok(Writer {
             w,
             arena,
             todo: VecDeque::new(),
@@ -34,7 +35,7 @@ impl<'a, W: Write> Writer<'a, W> {
             union_number: 0,
             current_fields: Vec::new(),
             is_pointer_field: false,
-        }
+        })
     }
 
     fn indent(&mut self) {
@@ -130,6 +131,13 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(())
     }
 
+    pub fn write_rest(&mut self) -> Result<()> {
+        self.write_todos()?;
+        self.write_stubs()?;
+        self.write_bool_types()?;
+        Ok(())
+    }
+
     fn write_class(&mut self, class: &Class) -> Result<()> {
         let Class { name, kind, members, properties, size } = class;
         self.current_type_name = Some(name.ident.clone());
@@ -140,16 +148,33 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             writeln!(self.w, "{}#[repr(C)]", self.indent)?;
         }
+        writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub struct {} {{", self.indent, name.ident)?;
         self.indent();
         self.union_number = 0;
         self.current_fields = Vec::new();
+        let mut fields = Vec::new();
         for member in members {
-            self.write_class_member(member)?;
+            fields.extend(self.write_class_member(member)?);
         }
         self.dedent();
         self.current_type_name = None;
-        writeln!(self.w, "{}}} // {:#05x}", self.indent, size)?;
+        writeln!(self.w, "{}}} // size {:#05x}", self.indent, size)?;
+
+        // write layout test
+        let struct_name = &name.ident;
+        writeln!(self.w, "{}pub fn test_{}_layout() {{", self.indent, struct_name)?;
+        self.indent();
+        for (name, offset) in fields {
+            match offset {
+                Some(offset) => writeln!(self.w, "{}assert_eq!(memoffset::offset_of!({struct_name}, {name}), {offset});", self.indent)?,
+                None => writeln!(self.w, "// {}", name)?,
+            }
+        }
+        writeln!(self.w, "{}assert_eq!(std::mem::size_of::<{struct_name}>(), {size});", self.indent)?;
+        self.dedent();
+        writeln!(self.w, "{}}}", self.indent)?;
+
         Ok(())
     }
 
@@ -161,6 +186,7 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             writeln!(self.w, "{}#[repr(C)]", self.indent)?;
         }
+        writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub union {} {{", self.indent, name.ident)?;
         self.current_type_name = Some(name.ident.clone());
         self.indent();
@@ -171,7 +197,7 @@ impl<'a, W: Write> Writer<'a, W> {
         }
         self.dedent();
         self.current_type_name = None;
-        writeln!(self.w, "{}}} // {:#05x}", self.indent, size)?;
+        writeln!(self.w, "{}}} // size {:#05x}", self.indent, size)?;
         Ok(())
     }
 
@@ -186,6 +212,7 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             writeln!(self.w, ")]")?;
         }
+        writeln!(self.w, "{}#[derive(Clone, Copy)]", self.indent)?;
         writeln!(self.w, "{}pub enum {} {{", self.indent, name.ident)?;
         self.current_type_name = Some(name.ident.clone());
         self.indent();
@@ -196,72 +223,76 @@ impl<'a, W: Write> Writer<'a, W> {
         }
         self.dedent();
         self.current_type_name = None;
-        writeln!(self.w, "{}}} // {:#05x}", self.indent, size)?;
+        writeln!(self.w, "{}}} // size {:#05x}", self.indent, size)?;
         Ok(())
     }
 
-    fn write_class_member(&mut self, member: &ClassMember) -> Result<()> {
-        match member {
+    fn write_class_member(&mut self, member: &ClassMember) -> Result<Vec<(String, Option<usize>)>> {
+        Ok(match member {
             ClassMember::Vtable => self.write_vtable()?,
             ClassMember::BaseClass(base) => self.write_base_class(base)?,
             ClassMember::VirtualBaseClass(base) => self.write_virtual_base_class(base)?,
             ClassMember::Field(field) => self.write_class_field(field)?,
-        }
-        Ok(())
+        })
     }
 
-    fn write_vtable(&mut self) -> Result<()> {
+    fn write_vtable(&mut self) -> Result<Vec<(String, Option<usize>)>> {
         let name = self.current_base_class_name.as_ref()
             .or(self.current_type_name.as_ref()).unwrap();
-        writeln!(self.w, "{}vtable_{}: *const (),", self.indent, name)?;
-        Ok(())
+        let name = format!("vtable_{}", name);
+        writeln!(self.w, "{}{}: *const (),", self.indent, name)?;
+        Ok(vec![(name, None)])
     }
 
-    fn write_base_class(&mut self, base: &BaseClass) -> Result<()> {
+    fn write_base_class(&mut self, base: &BaseClass) -> Result<Vec<(String, Option<usize>)>> {
         let BaseClass { attributes, offset, base_class } = base;
         let base_class = self.arena.get_largest_class_index(*base_class);
         let Class { name, kind, members, properties, size } = &self.arena[base_class];
         if attributes.any() {
             eprintln!("found nonrelevant base class: {}", name.name);
-            return Ok(());
+            return Ok(vec![]);
         }
         let old_base_class_name = mem::replace(&mut self.current_base_class_name, Some(name.ident.clone()));
         writeln!(self.w, "{}// START base class {}", self.indent, name.name)?;
+        let mut names = Vec::new();
         for member in members {
-            self.write_class_member(member)?;
+            names.extend(self.write_class_member(member)?);
         }
-        writeln!(self.w, "{}// END base class {} // {:#05x}", self.indent, name.name, size)?;
+        writeln!(self.w, "{}// END base class {} // size {:#05x}", self.indent, name.name, size)?;
         self.current_base_class_name = old_base_class_name;
-        Ok(())
+        Ok(names)
     }
 
-    fn write_virtual_base_class(&mut self, base: &VirtualBaseClass) -> Result<()> {
+    fn write_virtual_base_class(&mut self, base: &VirtualBaseClass) -> Result<Vec<(String, Option<usize>)>> {
         let VirtualBaseClass { attributes, base_pointer_offset, base_class, .. } = base;
         let base_class = self.arena.get_largest_class_index(*base_class);
         let Class { name, kind, members, properties, size } = &self.arena[base_class];
         if attributes.any() {
             eprintln!("found nonrelevant base class: {}", name.name);
-            return Ok(());
+            return Ok(vec![]);
         }
         let old_base_class_name = mem::replace(&mut self.current_base_class_name, Some(name.ident.clone()));
         writeln!(self.w, "{}// START virtual base class {}", self.indent, name.name)?;
+        let mut names = Vec::new();
         for member in members {
-            self.write_class_member(member)?;
+            names.extend(self.write_class_member(member)?);
         }
-        writeln!(self.w, "{}// END virtual base class {} // {:#05x}", self.indent, name.name, size)?;
+        writeln!(self.w, "{}// END virtual base class {} // size {:#05x}", self.indent, name.name, size)?;
         self.current_base_class_name = old_base_class_name;
-        Ok(())
+        Ok(names)
     }
 
-    fn write_class_field(&mut self, field: &ClassField) -> Result<()> {
+    fn write_class_field(&mut self, field: &ClassField) -> Result<Vec<(String, Option<usize>)>> {
         let ClassField { attributes, name, offset, kind } = field;
         if attributes.any() {
             eprintln!("found nonrelevant field: {}", name.name);
-            return Ok(());
+            return Ok(vec![]);
         }
-        if let ClassFieldKind::Union(_) = kind {
-            write!(self.w, "{}union{}: ", self.indent, self.union_number)?;
+        let name = if let ClassFieldKind::Union(_) = kind {
+            let name = format!("union{}", self.union_number);
+            write!(self.w, "{}{}: ", self.indent, name)?;
             self.union_number += 1;
+            name
         } else {
             // fix multiple fields with the same name
             let ident: Cow<_> = if self.current_fields.contains(&name.ident) {
@@ -277,12 +308,13 @@ impl<'a, W: Write> Writer<'a, W> {
             } else {
                 (&*name.ident).into()
             };
-            write!(self.w, "{}{}: ", self.indent, ident)?;
-            self.current_fields.push(ident.into_owned());
-        }
+            write!(self.w, "{}pub {}: ", self.indent, ident)?;
+            self.current_fields.push(ident.clone().into_owned());
+            ident.into_owned()
+        };
         self.write_class_field_kind(kind)?;
-        writeln!(self.w, ", // {:#05x}", offset)?;
-        Ok(())
+        writeln!(self.w, ", // offset {:#05x}", offset)?;
+        Ok(vec![(name, Some(*offset))])
     }
 
     fn write_class_field_kind(&mut self, kind: &ClassFieldKind) -> Result<()> {
@@ -440,17 +472,8 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 }
 
-impl<'a, W: Write> Drop for Writer<'a, W> {
-    fn drop(&mut self) {
-        // TODO: if panicking
-        self.write_todos().unwrap();
-        self.write_stubs().unwrap();
-        self.write_bool_types().unwrap();
-    }
-}
-
 fn bool_fmt(size: u8) -> String {
-    format!(r#"#[repr(C, packed)]
+    format!(r#"#[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct Bool{0}(u{0});
 

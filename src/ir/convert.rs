@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use pdb::{self, FallibleIterator, TypeInformation, Error as PdbError, TypeData, TypeFinder};
 

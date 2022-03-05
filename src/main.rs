@@ -11,15 +11,19 @@ struct Args {
     ignore: Vec<String>,
     #[clap(long)]
     replace: Vec<String>,
+    #[clap(long)]
+    recursive: bool,
 }
 
 fn main() {
     env_logger::init();
     let args = Args::parse();
     let mut arena = pdbextract::parse(&args.file).unwrap();
-    println!("parsed");
-    //let character = get_class(&arena, "AMyCharacter");
-    //character.check_offsets(&arena);
+    eprintln!("parsed");
+    // let character = get_class(&arena, "TTypeCompatibleBytes<unsigned int>");
+    // panic!("{}, {}", character.size, character.size(&arena));
+    // let character = get_class(&arena, "AMyCharacter");
+    // character.check_offsets(&arena);
     //writer.write_type(arena["AMyCharacter"]);
     //writer.write_type(arena["USceneComponent"]);
     //writer.write_type(arena["UCharacterMovementComponent"]);
@@ -27,13 +31,14 @@ fn main() {
 
     // weird_ue_fixes(&mut arena);
 
-    let mut writer = Writer::new(io::stdout(), &arena);
+    let mut writer = Writer::new(io::stdout(), &arena).unwrap();
     for name in &args.structs {
         writer.write_type(arena[&name]).unwrap();
     }
 
-    // skip drop of Writer -> TODO: why does that Drop impl exist?
-    ::std::process::exit(0);
+    if args.recursive {
+        writer.write_rest().unwrap();
+    }
 }
 
 #[allow(unused)]
