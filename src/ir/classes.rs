@@ -32,7 +32,7 @@ impl Class {
                         let max_size = peekable.peek().map(|t| match t {
                             TypeData::Member(field) => field.offset as usize - last_offset,
                             _ => usize::MAX,
-                        }).unwrap_or(usize::MAX);
+                        }).unwrap_or(size as usize - last_offset);
                         if let Ok(Some(member)) = ClassMember::from(converter, field, max_size) {
                             last_offset = member.offset();
                             members.push_back(member);
@@ -344,8 +344,8 @@ pub struct ClassField {
 
 impl ClassField {
     pub fn from(converter: &mut Converter, field: MemberType, max_size: usize) -> Result<ClassField> {
+        log::trace!("ClassField::from {:?}", field);
         let MemberType { attributes, name, offset, field_type, .. } = field;
-        log::trace!("ClassField::from {}", name);
         let kind = ClassFieldKind::from(converter, field_type)?;
         Ok(ClassField {
             attributes: attributes.into(),

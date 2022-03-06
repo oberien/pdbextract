@@ -462,6 +462,7 @@ impl<'a, W: Write> Writer<'a, W> {
             write!(self.w, "[")?;
         }
         let mut size = element_type.size(self.arena);
+        dbg!(size, max_size);
         self.write_class_field_kind(element_type, usize::MAX)?;
         dbg!(element_type, stride, dimensions);
         let len = dimensions.len();

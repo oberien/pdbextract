@@ -27,7 +27,7 @@ impl Union {
                         let max_size = peekable.peek().map(|t| match t {
                             TypeData::Member(field) => field.offset as usize - last_offset,
                             _ => usize::MAX,
-                        }).unwrap_or(usize::MAX);
+                        }).unwrap_or(size as usize - last_offset);
                         match field {
                             TypeData::Member(member) => {
                                 last_offset = member.offset as usize;

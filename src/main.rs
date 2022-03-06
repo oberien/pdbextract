@@ -39,14 +39,14 @@ fn main() {
     //         writer.write_exact_type(TypeIndex::Class(class_index));
     //     }
     // }
-    for name in &["TInlineAllocator<8,FDefaultAllocator>::ForElementType<TSharedPtr<FRootMotionSource,0> >", "TInlineAllocator<4,FDefaultAllocator>::ForElementType<TSharedPtr<FRootMotionSource,0> >"] {
+    for name in &["TTraceThreadData<FTraceDatum>"] {
     // for name in &args.structs {
         writer.write_type(arena[&name]).unwrap();
     }
 
-    if args.recursive {
-        writer.write_rest().unwrap();
-    }
+    // if args.recursive {
+    //     writer.write_rest().unwrap();
+    // }
     eprintln!("{:#?}", get_class(&arena, "TTraceThreadData<FTraceDatum>"));
     eprintln!("{:#?}", arena.get_class(ClassIndex(1866)));
 }
